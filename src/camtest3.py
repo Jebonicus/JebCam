@@ -10,11 +10,16 @@ from gi.repository import Gst, GObject, GLib
 Gst.init(None)
 
 # ===== CONFIGURE =====
-HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov6n.hef"   # adjust
+HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov11n.hef"   # adjust
+#HEF_PATH = "yolov5m6_6.1.hef"
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
 #INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
 INPUT = "cam.mp4"
 RTSP_URL = "rtsp://camera:c4mp4ss!@192.168.1.131:554/h264Preview_01_sub"
+ORIG_WIDTH=1920
+ORIGH_HEIGHT=576
+CROP_AMOUNT_L=500
+CROP_AMOUNT_R=350
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
@@ -27,8 +32,8 @@ pipeline_str = (
     #f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
     f'filesrc location="{INPUT}" name=source !'
     f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
-    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width=1920,height=576,framerate={FPS} ! '
-    f'videocrop left=960 right=0 top=0 bottom=0 ! '
+    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIGH_HEIGHT},framerate={FPS} ! '
+    f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
     f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
     f'videoconvert qos=false n-threads=3 ! '
@@ -39,14 +44,15 @@ pipeline_str = (
     f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
     f'queue name=inf_hailonet_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
-    f'nms-score-threshold=0.3 nms-iou-threshold=0.45 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
+    f'nms-score-threshold=0.3 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
     f'queue name=inf_hailofilter_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
     f'queue name=inf_out_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale ! videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '  # <--- Force overlay size
-    f'hailooverlay name=hailo_display_overlay ! '
+    #f'videoscale ! videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '  # <--- Force overlay size
+    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIGH_HEIGHT},format=RGB ! '  # <--- Force overlay size
+    f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
     f'queue name=hailo_display_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'{VIDEO_SINK} sync=true'

@@ -16,49 +16,39 @@ INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
 RTSP_URL = "rtsp://camera:c4mp4ss!@192.168.1.131:554/h264Preview_01_sub"
 WIDTH = 640
 HEIGHT = 640
-FPS = "30/1"
+FPS = "20/1"
 BATCH_SIZE = 1
-VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "autovideosink") #   # set GST_VIDEOSINK=ximagesink if using X11 forwarding
+VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 # =====================
 
 pipeline_str = (
-    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin !'      # Replace filesrc
-    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width=640,height=640,framerate=20/1 ! '
+    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
     #f'filesrc location="{INPUT}" name=source !'
     #f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
-    f'queue name=source_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'videoscale add-borders=false name=scale n-threads=2 !'
-    f'queue name=source_convert_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'videoconvert qos=false n-threads=3 !'
+    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width=640,height=640,framerate={FPS} ! '
+    f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
+    f'videoconvert qos=false n-threads=3 ! '
     f'video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
-    f'videorate name=source_videorate !'
-    f'capsfilter name=source_fps_caps caps="video/x-raw, framerate=20/1" !'
-    f'queue name=inf_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
+    f'videorate name=source_videorate ! '
+    f'queue name=inf_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'videoscale name=inference_videoscale n-threads=2 qos=false ! '
-    f'video/x-raw !'
-    f'videoconvert name=inference_videoconvert n-threads=2  ! '
-    f'queue name=inf_hailonet_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 nms-score-threshold=0.3 nms-iou-threshold=0.45 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
-    f'queue name=inf_hailofilter_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
+    f'videoconvert ! video/x-raw,width=640,height=640,format=RGB ! '   # <--- Force HEF input size
+    f'queue name=inf_hailonet_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
+    f'nms-score-threshold=0.3 nms-iou-threshold=0.45 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
+    f'queue name=inf_hailofilter_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
-    f'queue name=inf_out_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'queue name=identity_callback_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'identity name=identity_callback !'
-    f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 !'
-    f'hailooverlay name=hailo_display_overlay !'
-    f'queue name=hailo_display_videoconvert_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
-    f'videoconvert n-threads=2 qos=false  !'
+    f'queue name=inf_out_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'identity name=identity_callback ! '
+    f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'videoscale ! videoconvert ! video/x-raw,width=640,height=640,format=RGB ! '  # <--- Force overlay size
+    f'hailooverlay name=hailo_display_overlay ! '
+    f'videoconvert n-threads=2 qos=false ! '
     f'queue name=hailo_display_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
-    f'autovideosink sync=true'
+    f'{VIDEO_SINK} sync=true'
 )
 
-#pipeline_str=pipeline_str_broken
-# User-defined callback function: This is the callback function that will be called when data is available from the pipeline
-def app_callback(identity_element, buffer): #pad, info, user_data):
-    
-    #user_data.increment()  # Using the user_data to count the number of frames
-    #string_to_print = f"Frame count: {user_data.get_count()}\n"
-    #buffer = info.get_buffer()  # Get the GstBuffer from the probe info
+def app_callback(identity_element, buffer):
     string_to_print = ""
     if buffer is None:  # Check if the buffer is valid
         print("Buffer invalid")

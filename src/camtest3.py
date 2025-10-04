@@ -12,7 +12,8 @@ Gst.init(None)
 # ===== CONFIGURE =====
 HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov6n.hef"   # adjust
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
-INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
+#INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
+INPUT = "cam.mp4"
 RTSP_URL = "rtsp://camera:c4mp4ss!@192.168.1.131:554/h264Preview_01_sub"
 WIDTH = 640
 HEIGHT = 640
@@ -20,19 +21,22 @@ FPS = "20/1"
 BATCH_SIZE = 1
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 # =====================
+#1920×576
 
 pipeline_str = (
-    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
-    #f'filesrc location="{INPUT}" name=source !'
-    #f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
-    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width=640,height=640,framerate={FPS} ! '
+    #f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
+    f'filesrc location="{INPUT}" name=source !'
+    f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width=1920,height=576,framerate={FPS} ! '
+    f'videocrop left=960 right=0 top=0 bottom=0 ! '
+    f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
     f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
     f'videoconvert qos=false n-threads=3 ! '
     f'video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
     f'videorate name=source_videorate ! '
     f'queue name=inf_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'videoscale name=inference_videoscale n-threads=2 qos=false ! '
-    f'videoconvert ! video/x-raw,width=640,height=640,format=RGB ! '   # <--- Force HEF input size
+    f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
     f'queue name=inf_hailonet_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
     f'nms-score-threshold=0.3 nms-iou-threshold=0.45 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
@@ -41,7 +45,7 @@ pipeline_str = (
     f'queue name=inf_out_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale ! videoconvert ! video/x-raw,width=640,height=640,format=RGB ! '  # <--- Force overlay size
+    f'videoscale ! videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '  # <--- Force overlay size
     f'hailooverlay name=hailo_display_overlay ! '
     f'videoconvert n-threads=2 qos=false ! '
     f'queue name=hailo_display_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '

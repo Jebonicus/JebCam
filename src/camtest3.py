@@ -23,7 +23,7 @@ CROP_AMOUNT_R=450
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
-BATCH_SIZE = 4
+BATCH_SIZE = 1
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 OUTPUT_FILE = "out.mp4"
 # =====================
@@ -52,11 +52,12 @@ pipeline_str = (
     f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIG_HEIGHT},format=RGB ! '  # <--- Force overlay size
+    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
     f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
-    f'queue name=hailo_display_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'{VIDEO_SINK} sync=true'
+    f'queue name=hailo_display_q leaky=no max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
+    f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
+    #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 
 )

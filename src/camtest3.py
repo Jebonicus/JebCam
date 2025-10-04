@@ -10,29 +10,30 @@ from gi.repository import Gst, GObject, GLib
 Gst.init(None)
 
 # ===== CONFIGURE =====
-HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov11n.hef"   # adjust
+HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov8m.hef"   # adjust
 #HEF_PATH = "yolov5m6_6.1.hef"
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
 #INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
-INPUT = "cam.mp4"
+INPUT = "cam_s.mp4"
 RTSP_URL = "rtsp://camera:c4mp4ss!@192.168.1.131:554/h264Preview_01_sub"
 ORIG_WIDTH=1920
-ORIGH_HEIGHT=576
-CROP_AMOUNT_L=500
-CROP_AMOUNT_R=350
+ORIG_HEIGHT=576
+CROP_AMOUNT_L=600
+CROP_AMOUNT_R=450
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
 BATCH_SIZE = 1
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
+OUTPUT_FILE = "out.mp4"
 # =====================
 #1920×576
 
 pipeline_str = (
-    #f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
-    f'filesrc location="{INPUT}" name=source !'
-    f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
-    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIGH_HEIGHT},framerate={FPS} ! '
+    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
+    #f'filesrc location="{INPUT}" name=source !'
+    #f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
     f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
     f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
@@ -51,22 +52,30 @@ pipeline_str = (
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     #f'videoscale ! videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '  # <--- Force overlay size
-    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIGH_HEIGHT},format=RGB ! '  # <--- Force overlay size
+    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIG_HEIGHT},format=RGB ! '  # <--- Force overlay size
     f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
     f'queue name=hailo_display_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
     f'{VIDEO_SINK} sync=true'
-)
+    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 
+)
+ALLOWED_CLASSES = ["person", "dog", "cat"]
 def app_callback(identity_element, buffer):
     string_to_print = ""
     if buffer is None:  # Check if the buffer is valid
         print("Buffer invalid")
         return Gst.PadProbeReturn.OK
     for detection in hailo.get_roi_from_buffer(buffer).get_objects_typed(hailo.HAILO_DETECTION):  # Get the detections from the buffer & Parse the detections
+        label = detection.get_label()
+        if label not in ALLOWED_CLASSES:
+            continue  # Ignore unwanted classes
         bbox = detection.get_bbox()
-        string_to_print += (f"Detection: {detection.get_label()} Confidence: {detection.get_confidence():.2f} BBox: {bbox.xmin():.2f},{bbox.ymin():.2f},{bbox.width():.2f},{bbox.height():.2f}\n")
-    print(string_to_print)
+        centerX = bbox.xmin()+(bbox.width()/2)
+        centerY = bbox.ymin()+(bbox.height()/2)
+        string_to_print += (f"Detection: {label} Confidence: {detection.get_confidence():.2f} Center: {centerX:.2f},{centerY:.2f} BBox: {bbox.xmin():.2f},{bbox.ymin():.2f},{bbox.width():.2f},{bbox.height():.2f}\n")
+    if len(string_to_print)>0:
+      print(string_to_print)
     return Gst.PadProbeReturn.OK
 
 

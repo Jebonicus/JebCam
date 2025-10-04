@@ -23,16 +23,17 @@ CROP_AMOUNT_R=450
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
-BATCH_SIZE = 1
+BATCH_SIZE = 4
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 OUTPUT_FILE = "out.mp4"
 # =====================
+
 #1920×576
 
 pipeline_str = (
-    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
-    #f'filesrc location="{INPUT}" name=source !'
-    #f'queue leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    #f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
+    f'filesrc location="{INPUT}" name=source !'
+    f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
     f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
     f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -40,22 +41,21 @@ pipeline_str = (
     f'videoconvert qos=false n-threads=3 ! '
     f'video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
     f'videorate name=source_videorate ! '
-    f'queue name=inf_scale_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'queue name=inf_scale_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'videoscale name=inference_videoscale n-threads=2 qos=false ! '
     f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
-    f'queue name=inf_hailonet_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'queue name=inf_hailonet_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
     f'nms-score-threshold=0.3 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
-    f'queue name=inf_hailofilter_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'queue name=inf_hailofilter_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
-    f'queue name=inf_out_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'identity name=identity_callback ! '
-    f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
-    #f'videoscale ! videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '  # <--- Force overlay size
+    f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIG_HEIGHT},format=RGB ! '  # <--- Force overlay size
     f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
-    f'queue name=hailo_display_q leaky=no max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! '
+    f'queue name=hailo_display_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 
@@ -86,13 +86,8 @@ print("Launching pipeline...")
 pipeline = Gst.parse_launch(pipeline_str)
 
 identity_element = pipeline.get_by_name("identity_callback")
-identity_element.connect("handoff", app_callback)  # "handoff" signal is fired for each buffer
-#identity_element.set_property("app_callback", app_callback)
+identity_element.connect("handoff", app_callback)
 
-#identity = Gst.ElementFactory.make("identity", "identity_callback")
-#pipeline.add(identity)
-#identity_sinkpad = identity.get_static_pad("sink")
-#identity_sinkpad.add_probe(Gst.PadProbeType.BUFFER, app_callback, None)
 
 
 # Bus / messages
@@ -108,15 +103,12 @@ def on_message(bus, message):
         err, debug = message.parse_error()
         print("Gst ERROR:", err, debug)
         loop.quit()
-print("1")
+
 bus.connect("message", on_message)
-print("2")
 # Start pipeline and run GLib main loop
 
 pipeline.set_state(Gst.State.PLAYING)
-print("3")
 loop = GLib.MainLoop()
-print("4")
 def _sigint(*_):
     print("Caught SIGINT — stopping pipeline")
     pipeline.set_state(Gst.State.NULL)

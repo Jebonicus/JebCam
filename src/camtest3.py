@@ -5,7 +5,8 @@ import signal
 import gi
 import hailo
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GObject, GLib
+gi.require_version('GstRtspServer', '1.0')
+from gi.repository import Gst, GstRtspServer, GObject, GLib
 
 Gst.init(None)
 
@@ -23,17 +24,19 @@ CROP_AMOUNT_R=450
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
-BATCH_SIZE = 1
+BATCH_SIZE = 4
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 OUTPUT_FILE = "out.mp4"
+RTSP_MOUNT_POINT = "/stream"
+RTSP_PORT = 8554
 # =====================
 
 #1920×576
 
 pipeline_str = (
-    #f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
-    f'filesrc location="{INPUT}" name=source !'
-    f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
+    #f'filesrc location="{INPUT}" name=source !'
+    #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
     f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
     f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -56,7 +59,8 @@ pipeline_str = (
     f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
     f'queue name=hailo_display_q leaky=no max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
-    f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
+    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
+    f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
     #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 
@@ -80,46 +84,40 @@ def app_callback(identity_element, buffer):
     return Gst.PadProbeReturn.OK
 
 
-print("Pipeline:")
-print(pipeline_str)
-print("Launching pipeline...")
+# ===== RTSP MEDIA FACTORY =====
+class HailoMediaFactory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.launch_str = pipeline_str
+        self.set_shared(True)
 
-pipeline = Gst.parse_launch(pipeline_str)
+    def do_create_element(self, url):
+        pipeline = Gst.parse_launch(pipeline_str)
+        print(f'Starting server with pipeline={pipeline_str}')
+        identity_element = pipeline.get_by_name("identity_callback")
+        identity_element.connect("handoff", app_callback)
+        return pipeline
 
-identity_element = pipeline.get_by_name("identity_callback")
-identity_element.connect("handoff", app_callback)
+# ===== RTSP SERVER =====
+server = GstRtspServer.RTSPServer()
+server.set_service(str(RTSP_PORT))
+mounts = server.get_mount_points()
+factory = HailoMediaFactory()
+mounts.add_factory(RTSP_MOUNT_POINT,factory )
+server.attach(None)
 
+# Force creation of the media once, so pipeline starts now
+media = factory.do_create_element(None)
+media.set_state(Gst.State.PLAYING)
 
-
-# Bus / messages
-bus = pipeline.get_bus()
-bus.add_signal_watch()
-
-def on_message(bus, message):
-    t = message.type
-    if t == Gst.MessageType.EOS:
-        print("End-Of-Stream")
-        loop.quit()
-    elif t == Gst.MessageType.ERROR:
-        err, debug = message.parse_error()
-        print("Gst ERROR:", err, debug)
-        loop.quit()
-
-bus.connect("message", on_message)
-# Start pipeline and run GLib main loop
-
-pipeline.set_state(Gst.State.PLAYING)
+print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT_POINT}")
+# ===== MAIN LOOP =====
 loop = GLib.MainLoop()
 def _sigint(*_):
-    print("Caught SIGINT — stopping pipeline")
-    pipeline.set_state(Gst.State.NULL)
+    print("Caught SIGINT — stopping")
     loop.quit()
 
 signal.signal(signal.SIGINT, _sigint)
 signal.signal(signal.SIGTERM, _sigint)
 
-try:
-    loop.run()
-finally:
-    pipeline.set_state(Gst.State.NULL)
-    print("Pipeline stopped, exiting")
+loop.run()

@@ -60,18 +60,29 @@ pipeline_str = (
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'videoscale ! videoconvert ! video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
-    f'hailooverlay name=hailo_display_overlay  ! '
+    f'hailooverlay name=hailo_display_overlay ! '
     f'videoconvert n-threads=2 qos=false ! '
     f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=I420,framerate={FPS} ! '  # <--- Force overlay size'
     f'queue name=hailo_display_q leaky=no max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
     f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
-    #f'tee name=t !'
-    #f' queue ! fakesink ' # Just consume the frames to keep pipeline running
-    #f't. ! queue ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96'
+    #f'tee name=t ! '
+    #f'queue ! fakesink sync=false ' # Just consume the frames to keep pipeline running
+    #f'queue leaky=downstream max-size-buffers=5 ! appsink name=mysink emit-signals=true max-buffers=1 drop=true '
+    #f't. ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast key-int-max=20 ! rtph264pay config-interval=1 name=pay0 pt=96'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
     #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 )
+# === Forward frames from tee branch to RTSP appsrc ===
+def on_new_sample(sink, factory):
+    sample = sink.emit("pull-sample")
+    if not sample or not factory.appsrc:
+        return Gst.FlowReturn.OK
+
+    buf = sample.get_buffer()
+    factory.appsrc.emit("push-buffer", buf)
+    print(f'Sending frame...')
+    return Gst.FlowReturn.OK
 
 ALLOWED_CLASSES = ["person", "dog", "cat"]
 def app_callback(identity_element, buffer):
@@ -89,25 +100,39 @@ def app_callback(identity_element, buffer):
         string_to_print += (f"Detection: {label} Confidence: {detection.get_confidence():.2f} Center: {centerX:.2f},{centerY:.2f} BBox: {bbox.xmin():.2f},{bbox.ymin():.2f},{bbox.width():.2f},{bbox.height():.2f}\n")
     if len(string_to_print)>0:
       print(string_to_print)
+    else:
+      print("No detections")
     return Gst.PadProbeReturn.OK
 
-
-    
-
-# ===== RTSP FACTORY =====
-class RtspFactory2(GstRtspServer.RTSPMediaFactory):
+# ===== RTSP SERVER SETUP =====
+class RtspFactory(GstRtspServer.RTSPMediaFactory):
     def __init__(self):
         super().__init__()
         self.set_shared(True)
-        self.set_latency(100)  # small buffer for low latency
         self.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
-        self.set_launch("appsrc name=src is-live=true format=time do-timestamp=true ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96")
-        self.set_eos_shutdown(False)
+        self.set_latency(0)
+        self.set_launch(pipeline_str)
+        
+    def do_create_element(self, url):
+        pipeline = Gst.parse_launch(pipeline_str)
+        print(f'Starting server with pipeline={pipeline_str}')
+        identity_element = pipeline.get_by_name("identity_callback")
+        identity_element.connect("handoff", app_callback)
+        return pipeline
+
+class MyFactory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self):
+        super().__init__()
+        self.launch_str = f"appsrc name=appsrc is-live=true format=time do-timestamp=true ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96"
+        self.set_launch(self.launch_str)
+        self.set_shared(True)
+        self.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
+        self.set_latency(0)
         self.appsrc = None
 
     def do_create_element(self, url):
         elem = Gst.parse_launch(self.get_launch())
-        self.appsrc = elem.get_child_by_name("src")
+        self.appsrc = elem.get_child_by_name("appsrc")
         caps = Gst.Caps.from_string(
             f"video/x-raw,format=I420,width={TARGET_WIDTH},height={ORIG_HEIGHT},framerate={FPS}"
         )
@@ -115,123 +140,24 @@ class RtspFactory2(GstRtspServer.RTSPMediaFactory):
 
         print(f"Client connected")
         return elem
-# ===== RTSP factory that configures appsrc when a client attaches =====
-class RtspFactory(GstRtspServer.RTSPMediaFactory):
-    def __init__(self):
-        super().__init__()
-        # keep the media shared so reconnects reuse same bin where possible
-        self.set_shared(True)
-        # factory pipeline: appsrc (I420) -> videoconvert -> x264enc -> rtph264pay
-        self.set_launch("( appsrc name=src is-live=true do-timestamp=true format=time ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96 )")
-        self.appsrc = None
-        self.next_pts = 0
-        self.frame_duration = Gst.SECOND // FPS_NUM
 
-        # connect media-configure to set appsrc properties when media is created
-        self.connect("media-configure", self.on_media_configure)
+    def do_configure(self, rtsp_media):
+        self.appsrc = rtsp_media.get_element().get_child_by_name("appsrc")
+        self.appsrc.set_property("format", Gst.Format.TIME)
+        self.appsrc.set_property("is-live", True)
+        self.appsrc.set_property("do-timestamp", True)
 
-    def on_media_configure(self, factory, media):
-        """Called each time a media is created (client connects). Configure appsrc and store reference."""
-        element = media.get_element()
-        if element is None:
-            print("media-configure: no element")
-            return
-        appsrc = element.get_child_by_name("src")
-        if appsrc is None:
-            print("media-configure: no appsrc")
-            return
+rtsp_factory = MyFactory()
 
-        # set caps to match the buffers we will push (I420 TARGET_WIDTH x ORIG_HEIGHT)
-        caps = Gst.Caps.from_string(f"video/x-raw,format=I420,width={TARGET_WIDTH},height={ORIG_HEIGHT},framerate={FPS}")
-        appsrc.set_property("caps", caps)
-        appsrc.set_property("is-live", True)
-        appsrc.set_property("format", Gst.Format.TIME)
-        appsrc.set_property("do-timestamp", True)
-        appsrc.set_property("block", False)
-        # keep a reference on factory
-        self.appsrc = appsrc
-        # reset PTS so each client stream starts fresh from now
-        self.next_pts = int(Gst.util_get_timestamp())
-        # connect to media unprepare to clear appsrc when client disconnects
-        media.connect("unprepared", self.on_media_unprepared)
-        print("RtspFactory: media-configured, appsrc ready for pushes")
-
-    def on_media_unprepared(self, media):
-        # media destroyed / client disconnected, clear stored appsrc
-        print("RtspFactory: media unprepared (client disconnected), clearing appsrc")
-        self.appsrc = None
-rtsp_factory = RtspFactory()
-
-
-def on_new_sample(sink, factory):
-    sample = sink.emit("pull-sample")
-    if sample is None:
-        return Gst.FlowReturn.EOS
-
-    buf = sample.get_buffer()
-    #n_channels = 3  # RGB
-    caps = sample.get_caps()
-    info = GstVideo.VideoInfo.new_from_caps(caps)
-    width = info.width
-    height = info.height
-    stride = info.stride[0]
-
-    # Map the buffer
-    success, map_info = buf.map(Gst.MapFlags.READ)
-    if not success:
-        return Gst.FlowReturn.ERROR
-
-    frame = np.frombuffer(map_info.data, dtype=np.uint8)
-
-    # I420 planar layout: Y plane + U plane + V plane
-    y_size = height * width
-    uv_width = width // 2
-    uv_height = height // 2
-    u_size = v_size = uv_width * uv_height
-
-    if frame.size < y_size + u_size + v_size:
-        print(f"Buffer too small: {frame.size} < {y_size + u_size + v_size}")
-        buf.unmap(map_info)
-        return Gst.FlowReturn.OK
-
-    buf.unmap(map_info)
-
-    # Push to RTSP appsrc if available
-    if factory.appsrc:
-        out_buf = Gst.Buffer.new_allocate(None, frame.nbytes, None)
-        out_buf.fill(0, frame.tobytes())
-        out_buf.pts = buf.pts
-        out_buf.dts = buf.dts
-        out_buf.duration = buf.duration
-        factory.appsrc.emit("push-buffer", out_buf)
-
-    return Gst.FlowReturn.OK
-
-# ===== BUILD AND RUN =====
 pipeline = Gst.parse_launch(pipeline_str)
 
-identity = pipeline.get_by_name("identity_callback")
-identity.connect("handoff", app_callback)
+print(f'Starting server with pipeline={pipeline_str}')
+identity_element = pipeline.get_by_name("identity_callback")
+identity_element.connect("handoff", app_callback)
 
 appsink = pipeline.get_by_name("mysink")
-try:
-    appsink.disconnect_by_func(on_new_sample)  # best-effort; may not find old one
-except:
-    print(".")
-appsink.connect("new-sample", on_new_sample, rtsp_factory)
 
-# Add bus to catch errors / EOS
-bus = pipeline.get_bus()
-bus.add_signal_watch()
-def on_message(bus, msg):
-    if msg.type == Gst.MessageType.EOS:
-        print("End-of-stream")
-        loop.quit()
-    elif msg.type == Gst.MessageType.ERROR:
-        err, debug = msg.parse_error()
-        print("Gst Error:", err, debug)
-        loop.quit()
-bus.connect("message", on_message)
+appsink.connect("new-sample", on_new_sample, rtsp_factory)
 
 # Start RTSP server
 server = GstRtspServer.RTSPServer()
@@ -240,6 +166,8 @@ mounts.add_factory(RTSP_MOUNT, rtsp_factory)
 server.attach(None)
 
 pipeline.set_state(Gst.State.PLAYING)
+
+#pipeline.set_state(Gst.State.PLAYING)
 print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")
 # ===== MAIN LOOP =====
 loop = GLib.MainLoop()

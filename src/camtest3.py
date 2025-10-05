@@ -64,12 +64,12 @@ pipeline_str = (
     f'videoconvert n-threads=2 qos=false ! '
     f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=I420,framerate={FPS} ! '  # <--- Force overlay size'
     f'queue name=hailo_display_q leaky=no max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
-    f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
+    #f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
     #f'tee name=t ! '
     #f'queue ! fakesink sync=false ' # Just consume the frames to keep pipeline running
     #f'queue leaky=downstream max-size-buffers=5 ! appsink name=mysink emit-signals=true max-buffers=1 drop=true '
     #f't. ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast key-int-max=20 ! rtph264pay config-interval=1 name=pay0 pt=96'
-    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
+    f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
     #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 )
@@ -100,8 +100,8 @@ def app_callback(identity_element, buffer):
         string_to_print += (f"Detection: {label} Confidence: {detection.get_confidence():.2f} Center: {centerX:.2f},{centerY:.2f} BBox: {bbox.xmin():.2f},{bbox.ymin():.2f},{bbox.width():.2f},{bbox.height():.2f}\n")
     if len(string_to_print)>0:
       print(string_to_print)
-    else:
-      print("No detections")
+    #else:
+      #print("No detections")
     return Gst.PadProbeReturn.OK
 
 # ===== RTSP SERVER SETUP =====
@@ -147,17 +147,21 @@ class MyFactory(GstRtspServer.RTSPMediaFactory):
         self.appsrc.set_property("is-live", True)
         self.appsrc.set_property("do-timestamp", True)
 
-rtsp_factory = MyFactory()
+split = False
+if split:
+    rtsp_factory = MyFactory()
+    pipeline = Gst.parse_launch(pipeline_str)
 
-pipeline = Gst.parse_launch(pipeline_str)
+    print(f'Starting server with pipeline={pipeline_str}')
+    identity_element = pipeline.get_by_name("identity_callback")
+    identity_element.connect("handoff", app_callback)
 
-print(f'Starting server with pipeline={pipeline_str}')
-identity_element = pipeline.get_by_name("identity_callback")
-identity_element.connect("handoff", app_callback)
+    appsink = pipeline.get_by_name("mysink")
 
-appsink = pipeline.get_by_name("mysink")
+    appsink.connect("new-sample", on_new_sample, rtsp_factory)
+else:
+    rtsp_factory = RtspFactory()
 
-appsink.connect("new-sample", on_new_sample, rtsp_factory)
 
 # Start RTSP server
 server = GstRtspServer.RTSPServer()
@@ -165,7 +169,8 @@ mounts = server.get_mount_points()
 mounts.add_factory(RTSP_MOUNT, rtsp_factory)
 server.attach(None)
 
-pipeline.set_state(Gst.State.PLAYING)
+if split:
+    pipeline.set_state(Gst.State.PLAYING)
 
 #pipeline.set_state(Gst.State.PLAYING)
 print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")

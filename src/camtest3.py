@@ -26,7 +26,8 @@ CROP_AMOUNT_R=450
 TARGET_WIDTH=ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R
 WIDTH = 640
 HEIGHT = 640
-FPS = "20/1"
+FPS_NUM = 20
+FPS = f"{FPS_NUM}/1"
 BATCH_SIZE = 4
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 OUTPUT_FILE = "out.mp4"
@@ -94,15 +95,17 @@ def app_callback(identity_element, buffer):
     
 
 # ===== RTSP FACTORY =====
-class RtspFactory(GstRtspServer.RTSPMediaFactory):
+class RtspFactory2(GstRtspServer.RTSPMediaFactory):
     def __init__(self):
         super().__init__()
         self.set_shared(True)
+        self.set_latency(100)  # small buffer for low latency
+        self.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
         self.set_launch("appsrc name=src is-live=true format=time do-timestamp=true ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96")
+        self.set_eos_shutdown(False)
         self.appsrc = None
 
     def do_create_element(self, url):
-        global rtsp_appsrc
         elem = Gst.parse_launch(self.get_launch())
         self.appsrc = elem.get_child_by_name("src")
         caps = Gst.Caps.from_string(
@@ -110,17 +113,57 @@ class RtspFactory(GstRtspServer.RTSPMediaFactory):
         )
         self.appsrc.set_property("caps", caps)
 
-        rtsp_appsrc=self.appsrc
         print(f"Client connected")
         return elem
+# ===== RTSP factory that configures appsrc when a client attaches =====
+class RtspFactory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self):
+        super().__init__()
+        # keep the media shared so reconnects reuse same bin where possible
+        self.set_shared(True)
+        # factory pipeline: appsrc (I420) -> videoconvert -> x264enc -> rtph264pay
+        self.set_launch("( appsrc name=src is-live=true do-timestamp=true format=time ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96 )")
+        self.appsrc = None
+        self.next_pts = 0
+        self.frame_duration = Gst.SECOND // FPS_NUM
 
+        # connect media-configure to set appsrc properties when media is created
+        self.connect("media-configure", self.on_media_configure)
+
+    def on_media_configure(self, factory, media):
+        """Called each time a media is created (client connects). Configure appsrc and store reference."""
+        element = media.get_element()
+        if element is None:
+            print("media-configure: no element")
+            return
+        appsrc = element.get_child_by_name("src")
+        if appsrc is None:
+            print("media-configure: no appsrc")
+            return
+
+        # set caps to match the buffers we will push (I420 TARGET_WIDTH x ORIG_HEIGHT)
+        caps = Gst.Caps.from_string(f"video/x-raw,format=I420,width={TARGET_WIDTH},height={ORIG_HEIGHT},framerate={FPS}")
+        appsrc.set_property("caps", caps)
+        appsrc.set_property("is-live", True)
+        appsrc.set_property("format", Gst.Format.TIME)
+        appsrc.set_property("do-timestamp", True)
+        appsrc.set_property("block", False)
+        # keep a reference on factory
+        self.appsrc = appsrc
+        # reset PTS so each client stream starts fresh from now
+        self.next_pts = int(Gst.util_get_timestamp())
+        # connect to media unprepare to clear appsrc when client disconnects
+        media.connect("unprepared", self.on_media_unprepared)
+        print("RtspFactory: media-configured, appsrc ready for pushes")
+
+    def on_media_unprepared(self, media):
+        # media destroyed / client disconnected, clear stored appsrc
+        print("RtspFactory: media unprepared (client disconnected), clearing appsrc")
+        self.appsrc = None
 rtsp_factory = RtspFactory()
 
-# ===== APP SINK CALLBACK =====
-rtsp_appsrc = None  # Will be set when RTSP client connects
 
 def on_new_sample(sink, factory):
-    global rtsp_appsrc
     sample = sink.emit("pull-sample")
     if sample is None:
         return Gst.FlowReturn.EOS
@@ -171,6 +214,10 @@ identity = pipeline.get_by_name("identity_callback")
 identity.connect("handoff", app_callback)
 
 appsink = pipeline.get_by_name("mysink")
+try:
+    appsink.disconnect_by_func(on_new_sample)  # best-effort; may not find old one
+except:
+    print(".")
 appsink.connect("new-sample", on_new_sample, rtsp_factory)
 
 # Add bus to catch errors / EOS

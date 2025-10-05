@@ -4,9 +4,11 @@ import sys
 import signal
 import gi
 import hailo
+import numpy as np
+import cv2
 gi.require_version('Gst', '1.0')
 gi.require_version('GstRtspServer', '1.0')
-from gi.repository import Gst, GstRtspServer, GObject, GLib
+from gi.repository import Gst, GstRtspServer, GObject, GLib, GstVideo
 
 Gst.init(None)
 
@@ -21,22 +23,23 @@ ORIG_WIDTH=1920
 ORIG_HEIGHT=576
 CROP_AMOUNT_L=600
 CROP_AMOUNT_R=450
+TARGET_WIDTH=ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R
 WIDTH = 640
 HEIGHT = 640
 FPS = "20/1"
 BATCH_SIZE = 4
 VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # set GST_VIDEOSINK=ximagesink if using X11 forwarding
 OUTPUT_FILE = "out.mp4"
-RTSP_MOUNT_POINT = "/stream"
+RTSP_MOUNT = "/stream"
 RTSP_PORT = 8554
 # =====================
 
 #1920×576
 
 pipeline_str = (
-    f'rtspsrc location="{RTSP_URL}" latency=200 ! decodebin ! '
-    #f'filesrc location="{INPUT}" name=source !'
-    #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    #f'uridecodebin uri="{RTSP_URL}"  ! '
+    f'filesrc location="{INPUT}" name=source !'
+    f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
     f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
     f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -55,12 +58,16 @@ pipeline_str = (
     f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
     f'identity name=identity_callback ! '
     f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale ! videoconvert ! video/x-raw,width={ORIG_WIDTH-CROP_AMOUNT_L-CROP_AMOUNT_R},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
+    f'videoscale ! videoconvert ! video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
     f'hailooverlay name=hailo_display_overlay  ! '
     f'videoconvert n-threads=2 qos=false ! '
+    f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=I420,framerate={FPS} ! '  # <--- Force overlay size'
     f'queue name=hailo_display_q leaky=no max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
-    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
     f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
+    #f'tee name=t !'
+    #f' queue ! fakesink ' # Just consume the frames to keep pipeline running
+    #f't. ! queue ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96'
+    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
     #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
 
@@ -84,33 +91,109 @@ def app_callback(identity_element, buffer):
     return Gst.PadProbeReturn.OK
 
 
-# ===== RTSP MEDIA FACTORY =====
-class HailoMediaFactory(GstRtspServer.RTSPMediaFactory):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.launch_str = pipeline_str
+    
+
+# ===== RTSP FACTORY =====
+class RtspFactory(GstRtspServer.RTSPMediaFactory):
+    def __init__(self):
+        super().__init__()
         self.set_shared(True)
+        self.set_launch("appsrc name=src is-live=true format=time do-timestamp=true ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast ! rtph264pay name=pay0 pt=96")
+        self.appsrc = None
 
     def do_create_element(self, url):
-        pipeline = Gst.parse_launch(pipeline_str)
-        print(f'Starting server with pipeline={pipeline_str}')
-        identity_element = pipeline.get_by_name("identity_callback")
-        identity_element.connect("handoff", app_callback)
-        return pipeline
+        global rtsp_appsrc
+        elem = Gst.parse_launch(self.get_launch())
+        self.appsrc = elem.get_child_by_name("src")
+        caps = Gst.Caps.from_string(
+            f"video/x-raw,format=I420,width={TARGET_WIDTH},height={ORIG_HEIGHT},framerate={FPS}"
+        )
+        self.appsrc.set_property("caps", caps)
 
-# ===== RTSP SERVER =====
+        rtsp_appsrc=self.appsrc
+        print(f"Client connected")
+        return elem
+
+rtsp_factory = RtspFactory()
+
+# ===== APP SINK CALLBACK =====
+rtsp_appsrc = None  # Will be set when RTSP client connects
+
+def on_new_sample(sink, factory):
+    global rtsp_appsrc
+    sample = sink.emit("pull-sample")
+    if sample is None:
+        return Gst.FlowReturn.EOS
+
+    buf = sample.get_buffer()
+    #n_channels = 3  # RGB
+    caps = sample.get_caps()
+    info = GstVideo.VideoInfo.new_from_caps(caps)
+    width = info.width
+    height = info.height
+    stride = info.stride[0]
+
+    # Map the buffer
+    success, map_info = buf.map(Gst.MapFlags.READ)
+    if not success:
+        return Gst.FlowReturn.ERROR
+
+    frame = np.frombuffer(map_info.data, dtype=np.uint8)
+
+    # I420 planar layout: Y plane + U plane + V plane
+    y_size = height * width
+    uv_width = width // 2
+    uv_height = height // 2
+    u_size = v_size = uv_width * uv_height
+
+    if frame.size < y_size + u_size + v_size:
+        print(f"Buffer too small: {frame.size} < {y_size + u_size + v_size}")
+        buf.unmap(map_info)
+        return Gst.FlowReturn.OK
+
+    buf.unmap(map_info)
+
+    # Push to RTSP appsrc if available
+    if factory.appsrc:
+        out_buf = Gst.Buffer.new_allocate(None, frame.nbytes, None)
+        out_buf.fill(0, frame.tobytes())
+        out_buf.pts = buf.pts
+        out_buf.dts = buf.dts
+        out_buf.duration = buf.duration
+        factory.appsrc.emit("push-buffer", out_buf)
+
+    return Gst.FlowReturn.OK
+
+# ===== BUILD AND RUN =====
+pipeline = Gst.parse_launch(pipeline_str)
+
+identity = pipeline.get_by_name("identity_callback")
+identity.connect("handoff", app_callback)
+
+appsink = pipeline.get_by_name("mysink")
+appsink.connect("new-sample", on_new_sample, rtsp_factory)
+
+# Add bus to catch errors / EOS
+bus = pipeline.get_bus()
+bus.add_signal_watch()
+def on_message(bus, msg):
+    if msg.type == Gst.MessageType.EOS:
+        print("End-of-stream")
+        loop.quit()
+    elif msg.type == Gst.MessageType.ERROR:
+        err, debug = msg.parse_error()
+        print("Gst Error:", err, debug)
+        loop.quit()
+bus.connect("message", on_message)
+
+# Start RTSP server
 server = GstRtspServer.RTSPServer()
-server.set_service(str(RTSP_PORT))
 mounts = server.get_mount_points()
-factory = HailoMediaFactory()
-mounts.add_factory(RTSP_MOUNT_POINT,factory )
+mounts.add_factory(RTSP_MOUNT, rtsp_factory)
 server.attach(None)
 
-# Force creation of the media once, so pipeline starts now
-media = factory.do_create_element(None)
-media.set_state(Gst.State.PLAYING)
-
-print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT_POINT}")
+pipeline.set_state(Gst.State.PLAYING)
+print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")
 # ===== MAIN LOOP =====
 loop = GLib.MainLoop()
 def _sigint(*_):

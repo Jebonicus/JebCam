@@ -10,6 +10,7 @@ gi.require_version('Gst', '1.0')
 gi.require_version('GstRtspServer', '1.0')
 from gi.repository import Gst, GstRtspServer, GObject, GLib, GstVideo
 from tracker import Tracker
+from jebsecrets import Secrets
 import threading
 import time
 
@@ -53,7 +54,7 @@ HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov8m.hef"   # adjust
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
 #INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
 INPUT = "cam_s.mp4"
-RTSP_URL = "rtsp://camera:c4mp4ss!@192.168.1.131:554/h264Preview_01_sub"
+RTSP_URL = Secrets.RTSP_URL
 ORIG_WIDTH=1920
 ORIG_HEIGHT=576
 CROP_AMOUNT_L=600

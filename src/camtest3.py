@@ -37,9 +37,9 @@ RTSP_PORT = 8554
 #1920×576
 
 pipeline_str = (
-    #f'uridecodebin uri="{RTSP_URL}"  ! '
-    f'filesrc location="{INPUT}" name=source !'
-    f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+    f'uridecodebin uri="{RTSP_URL}"  ! '
+    #f'filesrc location="{INPUT}" name=source !'
+    #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
     f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
     f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
     f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -70,8 +70,8 @@ pipeline_str = (
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96'
     #f'{VIDEO_SINK} sync=true'
     #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
-
 )
+
 ALLOWED_CLASSES = ["person", "dog", "cat"]
 def app_callback(identity_element, buffer):
     string_to_print = ""

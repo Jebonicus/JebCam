@@ -13,6 +13,7 @@ from tracker import Tracker
 from jebsecrets import Secrets
 import threading
 import time
+import argparse
 
 latest_frame = None
 latest_lock = threading.Lock()
@@ -74,49 +75,61 @@ tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1
 
 #1920×576
 
-pipeline_str = (
-    f'uridecodebin uri="{RTSP_URL}"  ! '
-    #f'filesrc location="{INPUT}" name=source !'
-    #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
-    f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
-    f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
-    f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
-    f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
-    f'videoconvert qos=false n-threads=3 ! '
-    f'video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
-    f'videorate name=source_videorate ! '
-    f'queue name=inf_scale_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale name=inference_videoscale n-threads=2 qos=false ! '
-    f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
-    f'queue name=inf_hailonet_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
-    f'nms-score-threshold=0.3 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
-    f'queue name=inf_hailofilter_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
-    f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'identity name=identity_callback ! '
-    f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
-    f'videoscale ! videoconvert ! video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
-    f'hailooverlay name=hailo_display_overlay ! '
-    f'videoconvert n-threads=2 qos=false ! '
-    f'queue name=hailo_display_q leaky=no  max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
-    #f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
-    f'tee name=t ! '
-    f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size'
-    #f'queue ! fakesink sync=false ' # Just consume the frames to keep pipeline running
-    f'videoconvert n-threads=2 qos=false ! '
-    f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=BGR,framerate={FPS} ! '  # <--- Force overlay size'
-    f'queue leaky=no max-size-buffers=5 ! appsink name=mysink emit-signals=true max-buffers=1 drop=true '
-    #f't. ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast key-int-max=20 ! rtph264pay config-interval=1 name=pay0 pt=96'
-    f't. ! '
-    f'queue leaky=no max-size-buffers=5 ! '
-    f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size'
-    f'videoconvert  n-threads=2 qos=false ! '
-    f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=I420,framerate={FPS} ! '  # <--- Force overlay size'
-    f'x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96 '
-    #f'{VIDEO_SINK} sync=true'
-    #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
-)
+def buildPipelineStr(enable_rtsp):
+    pipeline_str = (
+        f'uridecodebin uri="{RTSP_URL}"  ! '
+        #f'filesrc location="{INPUT}" name=source !'
+        #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+        f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
+        f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
+        f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
+        f'queue name=source_scale_q leaky=no max-size-buffers=5 max-size-bytes=0 max-size-time=0 ! '
+        f'videoconvert qos=false n-threads=3 ! '
+        f'video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
+        f'videorate name=source_videorate ! '
+        f'queue name=inf_scale_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
+        f'videoscale name=inference_videoscale n-threads=2 qos=false ! '
+        f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
+        f'queue name=inf_hailonet_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
+        f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
+        f'nms-score-threshold=0.3 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
+        f'queue name=inf_hailofilter_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
+        f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
+        f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
+        f'identity name=identity_callback ! '
+        f'queue name=hailo_display_overlay_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
+        f'videoscale ! videoconvert ! video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '  # <--- Force overlay size
+        f'hailooverlay name=hailo_display_overlay ! '
+        f'videoconvert n-threads=2 qos=false ! '
+        f'queue name=hailo_display_q leaky=no  max-size-buffers=10 max-size-bytes=0 max-size-time=0 ! '
+    )
+    if enable_rtsp:
+        pipeline_str += (
+            #f'appsink name=mysink emit-signals=true max-buffers=1 drop=true'
+            f'tee name=t ! '
+            f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '
+            #f'queue ! fakesink sync=false ' # Just consume the frames to keep pipeline running
+            f'videoconvert n-threads=2 qos=false ! '
+            f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=BGR,framerate={FPS} ! '
+            f'queue leaky=no max-size-buffers=5 ! appsink name=mysink emit-signals=true max-buffers=1 drop=true '
+            #f't. ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! x264enc tune=zerolatency bitrate=2000 speed-preset=ultrafast key-int-max=20 ! rtph264pay config-interval=1 name=pay0 pt=96'
+            f't. ! '
+            f'queue leaky=no max-size-buffers=5 ! '
+            f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=RGB,framerate={FPS} ! '
+            f'videoconvert  n-threads=2 qos=false ! '
+            f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=I420,framerate={FPS} ! '
+            f'x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! rtph264pay config-interval=1 name=pay0 pt=96 '
+            #f'{VIDEO_SINK} sync=true'
+            #f'videoconvert ! x264enc bitrate=2000 speed-preset=ultrafast tune=zerolatency ! mp4mux ! filesink location="{OUTPUT_FILE}"'
+        )
+    else:
+        pipeline_str += (
+            f'videoconvert n-threads=2 qos=false ! '
+            f'video/x-raw,width={TARGET_WIDTH},height={ORIG_HEIGHT},format=BGR,framerate={FPS} ! '
+            f'queue leaky=no max-size-buffers=5 ! appsink name=mysink emit-signals=true max-buffers=1 drop=true '
+        )
+    return pipeline_str
+
 # === Forward frames from tee branch to RTSP appsrc ===
 def draw_tracks(frame, tracks):
     # frame: HxWx3 BGR
@@ -127,7 +140,7 @@ def draw_tracks(frame, tracks):
         cv2.rectangle(frame, (x,y), (x+int(w), y+int(h)), (0,255,0), 2)
         cv2.putText(frame, f"ID:{t.id}, {t.label}", (x, y-6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
 
-def on_new_sample(sink, factory):
+def on_new_sample(sink, factory=None):
     global tracker, latest_lock, latest_frame
     sample = sink.emit("pull-sample")
     if not sample:
@@ -175,7 +188,7 @@ def app_callback(identity_element, buffer):
     #string_to_print = ""
     frame_w = TARGET_WIDTH   # the pixel width your hailo inference is referencing
     frame_h = ORIG_HEIGHT    # pixel height for overlay / tracker coords
-
+    #print(f'app_callback')
     det_boxes = []
     if buffer is None:  # Check if the buffer is valid
         print("Buffer invalid")
@@ -207,22 +220,23 @@ def app_callback(identity_element, buffer):
 
 # ===== RTSP SERVER SETUP =====
 class RtspFactory(GstRtspServer.RTSPMediaFactory):
-    def __init__(self):
+    def __init__(self, pipeline_str):
         super().__init__()
         self.set_shared(True)
         self.set_suspend_mode(GstRtspServer.RTSPSuspendMode.NONE)
         self.set_latency(0)
         self.set_launch(pipeline_str)
+        self.pipeline_str=pipeline_str
         
     def do_create_element(self, url):
-        pipeline = Gst.parse_launch(pipeline_str)
-        print(f'Starting server with pipeline={pipeline_str}')
+        pipeline = Gst.parse_launch(self.pipeline_str)
+        print(f'Starting server with pipeline={self.pipeline_str}')
         identity_element = pipeline.get_by_name("identity_callback")
         identity_element.connect("handoff", app_callback)
 
         appsink = pipeline.get_by_name("mysink")
         if appsink is not None:
-            appsink.connect("new-sample", on_new_sample, rtsp_factory)
+            appsink.connect("new-sample", on_new_sample, self)
         print(f'do_create_element done')
 
         return pipeline
@@ -253,45 +267,71 @@ class MyFactory(GstRtspServer.RTSPMediaFactory):
         self.appsrc.set_property("is-live", True)
         self.appsrc.set_property("do-timestamp", True)
 
-split = False
-if split:
-    rtsp_factory = MyFactory()
-    pipeline = Gst.parse_launch(pipeline_str)
+def main():
+    parser = argparse.ArgumentParser(description="JebCam")
 
-    print(f'Starting split server with pipeline={pipeline_str}')
-    identity_element = pipeline.get_by_name("identity_callback")
-    identity_element.connect("handoff", app_callback)
+    # Define optional boolean flags
+    parser.add_argument('--split', action='store_true', help='Enable split pipeline mode (buggy, slow)')
+    parser.add_argument('--rtsp', action='store_true', help='Enable RTSP output')
 
-    appsink = pipeline.get_by_name("mysink")
+    args = parser.parse_args()
 
-    appsink.connect("new-sample", on_new_sample, rtsp_factory)
-else:
-    rtsp_factory = RtspFactory()
+    # Access as boolean variables
+    split = args.split
+    enable_rtsp = args.rtsp
+
+    pipeline_str = buildPipelineStr(enable_rtsp)
+    if split:
+        rtsp_factory = MyFactory()
+        pipeline = Gst.parse_launch(pipeline_str)
+
+        print(f'Starting split server with pipeline={pipeline_str}')
+        identity_element = pipeline.get_by_name("identity_callback")
+        identity_element.connect("handoff", app_callback)
+
+        appsink = pipeline.get_by_name("mysink")
+
+        appsink.connect("new-sample", on_new_sample, rtsp_factory)
+    elif not enable_rtsp:
+        
+        pipeline = Gst.parse_launch(pipeline_str)
+        identity_element = pipeline.get_by_name("identity_callback")
+        identity_element.connect("handoff", app_callback)
+
+        appsink = pipeline.get_by_name("mysink")
+        if appsink is not None:
+            appsink.connect("new-sample", on_new_sample)
+    else:
+        rtsp_factory = RtspFactory(pipeline_str)
 
 
-# Start RTSP server
-server = GstRtspServer.RTSPServer()
-mounts = server.get_mount_points()
-mounts.add_factory(RTSP_MOUNT, rtsp_factory)
-server.attach(None)
+    if enable_rtsp:
+        # Start RTSP server
+        server = GstRtspServer.RTSPServer()
+        mounts = server.get_mount_points()
+        mounts.add_factory(RTSP_MOUNT, rtsp_factory)
+        server.attach(None)
+        #pipeline.set_state(Gst.State.PLAYING)
+        print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")
 
-if split:
-    pipeline.set_state(Gst.State.PLAYING)
+    if not enable_rtsp or split:
+        pipeline.set_state(Gst.State.PLAYING)
 
-#pipeline.set_state(Gst.State.PLAYING)
-print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")
-# ===== MAIN LOOP =====
-loop = GLib.MainLoop()
-def _sigint(*_):
-    print("Caught SIGINT — stopping")
-    loop.quit()
+    # ===== MAIN LOOP =====
+    loop = GLib.MainLoop()
+    def _sigint(*_):
+        print("Caught SIGINT — stopping")
+        loop.quit()
 
-signal.signal(signal.SIGINT, _sigint)
-signal.signal(signal.SIGTERM, _sigint)
+    signal.signal(signal.SIGINT, _sigint)
+    signal.signal(signal.SIGTERM, _sigint)
 
-cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT)  # width=1280, height=720
-visualizer = VisualizerThread(tracker, interval=0.5)
-visualizer.daemon = True
-visualizer.start()
-loop.run()
+    cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
+    visualizer = VisualizerThread(tracker, interval=0.5)
+    visualizer.daemon = True
+    visualizer.start()
+    loop.run()
+
+if __name__ == "__main__":
+    main()

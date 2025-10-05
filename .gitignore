@@ -7,3 +7,4 @@ pyhailort.log
 .gitignore
 gstshark_2025-10-04_20:59:11/metadata
 gstshark_2025-10-04_20:59:11/datastream
+jebsecrets.py

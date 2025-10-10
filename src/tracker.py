@@ -87,6 +87,7 @@ class Track:
         self.time_since_update = 0
         self.last_frame = frame_idx
         self.history = []  # optional: store past boxes
+        self.targetLockDuration = 0.0
 
     def predict(self):
         s = self.kf.predict().flatten()

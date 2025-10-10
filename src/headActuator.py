@@ -1,0 +1,50 @@
+from jebsecrets import Secrets
+from tracker import Tracker
+import math
+import paho.mqtt.client as mqtt
+
+class HeadActuator:
+    def __init__(self, reference_point=(500, 350), default_angle=90):
+        self.default_angle = default_angle
+        self.targetAngle = -2
+        self.reference_point = reference_point
+
+        # Connect to MQTT server
+        self.mqtt_client = mqtt.Client()
+        self.mqtt_client.username_pw_set(Secrets.mqtt_user, Secrets.mqtt_pass)
+
+        try:
+            self.mqtt_client.connect(Secrets.mqtt_server, Secrets.mqtt_port, keepalive=60)
+            self.mqtt_client.loop_start()
+            self.mqtt_connected = True
+            print(f"HeadActuator(): Connected to MQTT broker {Secrets.mqtt_server}:{Secrets.mqtt_port}")
+        except Exception as e:
+            print(f"HeadActuator(): MQTT connection failed: {e}")
+            self.mqtt_connected = False
+
+    def update(self, targetTrack):
+        changed=False
+        if targetTrack is None:
+            newAngle = self.default_angle
+        else:
+            x, y, w, h = targetTrack.get_state().astype(int)
+            bottomMiddleCoord = (x + w / 2, y + h)
+            headCoord = self.reference_point
+            dx = bottomMiddleCoord[0] - headCoord[0]
+            dy = headCoord[1] - bottomMiddleCoord[1]
+            # atan2 returns angle from X-axis, so 0° = right; we shift and flip it to 0°=up, 180°=right
+            raw_angle = math.degrees(math.atan2(dy, dx))  # -180..180
+            adjusted_angle = (raw_angle)  # make 0° up
+            newAngle = max(0, min(180, adjusted_angle))  # clamp to 0–180°
+            print(f'HeadActuator.update() TRACK {targetTrack.id}: [{dx:.1f},{dy:.1f}]->{raw_angle}°->{newAngle:.1f}°')
+
+        if abs(newAngle-self.targetAngle)>1:
+            self.targetAngle = newAngle
+
+            # Send to MQTT if connected
+            if self.mqtt_connected:
+                try:
+                    self.mqtt_client.publish("halloween/head_angle", round(self.targetAngle))
+                    # print(f"Published {self.targetAngle:.1f}° to halloween/head_angle")
+                except Exception as e:
+                    print(f"MQTT publish failed: {e}")

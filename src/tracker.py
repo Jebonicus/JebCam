@@ -122,13 +122,15 @@ class Tracker:
                  dist_threshold=100.0,
                  max_age=30,
                  min_hits=3,
-                 dt=1.0):
+                 dt=1.0,
+                 exclusions=[]):
         """
         - iou_threshold: optional if using IoU matching
         - dist_threshold: maximum centroid distance for matching (pixels)
         - max_age: frames to keep a track without updates
         - min_hits: frames required to confirm a track
         - dt: time step for KF (1.0 per frame by default; set 1/fps if you have accurate FPS)
+        - exclusions: array of (x,y,w,h) boxes to use as exclusion zones for suppressing creation of new tracks
         """
         self.tracks = []
         self.iou_th = iou_threshold
@@ -137,6 +139,7 @@ class Tracker:
         self.min_hits = min_hits
         self.frame_idx = 0
         self.dt = dt
+        self.exclusions = exclusions
 
     @staticmethod
     def _centroid(box):
@@ -149,7 +152,7 @@ class Tracker:
 
     def update(self, detections_xywh):
         """
-        detections_xywh: list of boxes (x,y,w,h,label) in pixels for this frame
+        detections_xywh: list of boxes (x,y,w,h) in pixels for this frame
         Returns: list of active tracks (only confirmed ones)
         """
         self.frame_idx += 1
@@ -170,7 +173,8 @@ class Tracker:
         if len(self.tracks) == 0:
             # create tracks for all detections
             for d in detections_xywh:
-                self.tracks.append(Track(d, frame_idx=self.frame_idx, dt=self.dt))
+                if not self.is_excluded(d):
+                    self.tracks.append(Track(d, frame_idx=self.frame_idx, dt=self.dt))
             return [t for t in self.tracks if t.hits >= self.min_hits]
 
         cost = np.zeros((len(self.tracks), len(detections_xywh)), dtype=float)
@@ -200,7 +204,7 @@ class Tracker:
 
         # Unmatched detections -> create new tracks
         for j, det in enumerate(detections_xywh):
-            if j not in matched_det:
+            if j not in matched_det and not self.is_excluded(det):
                 self.tracks.append(Track(det, frame_idx=self.frame_idx, dt=self.dt))
 
         # Remove dead tracks
@@ -209,6 +213,44 @@ class Tracker:
         # Return confirmed tracks
         confirmed = [t for t in self.tracks if t.hits >= self.min_hits]
         return confirmed
+    
+    def is_excluded(self, det_xywh, iou_threshold=0.3):
+        """
+        Return True if IOU of det_xywh is greater than a threshold
+        for any of the 'exclusions' boxes.
+        self.exclusions is a list of (x, y, w, h) bounding boxes.
+        """
+        x, y, w, h = det_xywh['box']
+        det_x1, det_y1, det_x2, det_y2 = x, y, x + w, y + h
+
+        for ex in self.exclusions:
+            ex_x, ex_y, ex_w, ex_h = ex
+            ex_x1, ex_y1, ex_x2, ex_y2 = ex_x, ex_y, ex_x + ex_w, ex_y + ex_h
+
+            # Compute intersection
+            inter_x1 = max(det_x1, ex_x1)
+            inter_y1 = max(det_y1, ex_y1)
+            inter_x2 = min(det_x2, ex_x2)
+            inter_y2 = min(det_y2, ex_y2)
+
+            inter_w = max(0, inter_x2 - inter_x1)
+            inter_h = max(0, inter_y2 - inter_y1)
+            inter_area = inter_w * inter_h
+
+            # Compute areas and IoU
+            det_area = w * h
+            ex_area = ex_w * ex_h
+            union_area = det_area + ex_area - inter_area
+            iou = inter_area / union_area if union_area > 0 else 0.0
+
+            # Check against threshold
+            if iou > iou_threshold:
+                # Arrr! Ye be in forbidden waters!
+                print(f"[Exclusion] Detection excluded (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
+                return True
+            else:
+                print(f"[Exclusion] nope (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
+        return False
 
     def get_all_tracks(self):
         """Return all tracks (including unconfirmed)"""

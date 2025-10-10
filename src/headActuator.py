@@ -2,12 +2,15 @@ from jebsecrets import Secrets
 from tracker import Tracker
 import math
 import paho.mqtt.client as mqtt
+import time
 
 class HeadActuator:
     def __init__(self, reference_point=(500, 350), default_angle=90):
         self.default_angle = default_angle
         self.targetAngle = -2
         self.reference_point = reference_point
+        self.last_change_time = 0
+        self.min_mqtt_wait_time_ms = 0.04
 
         # Connect to MQTT server
         self.mqtt_client = mqtt.Client()
@@ -34,13 +37,17 @@ class HeadActuator:
             dy = headCoord[1] - bottomMiddleCoord[1]
             # atan2 returns angle from X-axis, so 0° = right; we shift and flip it to 0°=up, 180°=right
             raw_angle = math.degrees(math.atan2(dy, dx))  # -180..180
+            if raw_angle < -90:
+                raw_angle = 180
             adjusted_angle = (raw_angle)  # make 0° up
             newAngle = max(0, min(180, adjusted_angle))  # clamp to 0–180°
             print(f'HeadActuator.update() TRACK {targetTrack.id}: [{dx:.1f},{dy:.1f}]->{raw_angle}°->{newAngle:.1f}°')
 
-        if abs(newAngle-self.targetAngle)>1:
-            self.targetAngle = newAngle
 
+        time_since_change = time.time() - self.last_change_time
+        if time_since_change > self.min_mqtt_wait_time_ms and abs(newAngle-self.targetAngle)>=1:
+            self.targetAngle = newAngle
+            self.last_change_time = time.time()
             # Send to MQTT if connected
             if self.mqtt_connected:
                 try:

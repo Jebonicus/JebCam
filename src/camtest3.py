@@ -69,6 +69,9 @@ HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov8m.hef"   # adjust
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
 #INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
 INPUT = "cam_s.mp4"
+INPUT = "/A/JebCam/Person2_x3.mp4"
+#INPUT = "/A/JebCam/Person3_dog.mp4"
+#INPUT = "/A/JebCam/Person4_kids.mp4"
 RTSP_URL = Secrets.RTSP_URL
 ORIG_WIDTH=1920
 ORIG_HEIGHT=576
@@ -85,7 +88,10 @@ OUTPUT_FILE = "out.mp4"
 RTSP_MOUNT = "/stream"
 RTSP_PORT = 8554
 # =====================
-tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0)
+tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0, exclusions=[
+    (531, 37,  55, 76),
+    (470, 56,  25, 40)
+])
 headActuator = HeadActuator(reference_point=(500, 350))
 targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(500, 350))
 
@@ -93,9 +99,9 @@ targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.updat
 
 def buildPipelineStr(enable_rtsp):
     pipeline_str = (
-        f'uridecodebin uri="{RTSP_URL}"  ! '
-        #f'filesrc location="{INPUT}" name=source !'
-        #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+        #f'uridecodebin uri="{RTSP_URL}"  ! '
+        f'filesrc location="{INPUT}" name=source !'
+        f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
         f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
         f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
         f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -380,7 +386,7 @@ def main():
     cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
     targetAcquisition.start()
-    visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.2)
+    visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.5)
     visualizer.daemon = True
     visualizer.start()
     loop.run()

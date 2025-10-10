@@ -99,9 +99,10 @@ class TargetAcquisition(threading.Thread):
 
         # Weights for cost components (tune to yer liking, Cap’n)
         w_dist = 1.0      # per pixel
+        w_dist_pow = 1.5  # Make distance cost non-linear
         w_age = 2.0       # per frame
         w_update = 5.0    # per frame since last update
         w_sametrack = 100.0
 
-        cost = (w_dist * distance) + (w_age * t.age) + (w_update * t.time_since_update) + (t.targetLockDuration*w_sametrack)
+        cost = (w_dist * pow(distance, w_dist_pow)) + (w_age * t.age) + (w_update * t.time_since_update) + (t.targetLockDuration*w_sametrack)
         return cost

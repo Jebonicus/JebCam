@@ -45,15 +45,31 @@ class TargetAcquisition(threading.Thread):
                 best_track, best_cost = sorted_tracks[0]
                 current_cost = track_costs.get(self.targetTrack, float('inf'))
 
-                # Switch target if no current one, or current one is costlier by hysteresis margin
-                if self.targetTrack is None or (best_cost + self.hysteresis < current_cost and time_since_switch > self.min_lock_time):
+                # Detect if current target disappeared from tracking list
+                target_lost = (self.targetTrack is not None and self.targetTrack not in track_costs)
+
+                # Switch immediately if target lost,
+                # or switch normally using hysteresis + min_lock_time
+                should_switch = (
+                    self.targetTrack is None
+                    or target_lost
+                    or (best_cost + self.hysteresis < current_cost and time_since_switch > self.min_lock_time)
+                )
+
+                if should_switch:
                     if self.targetTrack != best_track:
-                        print(f"[TargetAcquisition] Switching target to track {best_track.id} (cost={best_cost:.2f})")
+                        reason = "target lost" if target_lost else "better track"
+                        print(f"[TargetAcquisition] Switching target to track {best_track.id} ({reason}, cost={best_cost:.2f})")
                         self.last_switch_time = time.time()
+                        best_track.targetLockDuration = 0.0
                     self.targetTrack = best_track
-                self.targetTrack.targetLockDuration += self.interval
-                print(f"[TargetAcquisition] Locked target {self.targetTrack.id} for {self.targetTrack.targetLockDuration:.2f}: (cost={best_cost:.2f})")
-                
+
+                # Update lock duration
+                if self.targetTrack is not None:
+                    self.targetTrack.targetLockDuration += self.interval
+                    print(f"[TargetAcquisition] Locked target {self.targetTrack.id} for {self.targetTrack.targetLockDuration:.2f}s (cost={best_cost:.2f})")
+
+
             if self.targetCallback is not None:
                 self.targetCallback(self.targetTrack)
 

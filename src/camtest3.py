@@ -9,6 +9,7 @@ import cv2
 import threading
 import time
 import argparse
+import math
 gi.require_version('Gst', '1.0')
 gi.require_version('GstRtspServer', '1.0')
 from gi.repository import Gst, GstRtspServer, GObject, GLib, GstVideo
@@ -22,11 +23,12 @@ latest_frame = None
 latest_lock = threading.Lock()
 
 class VisualizerThread(threading.Thread):
-    def __init__(self, tracker, targetAcquisition, interval=1.0):
+    def __init__(self, tracker, targetAcquisition, headActuator, interval=1.0):
         super().__init__(daemon=True)
         self.tracker = tracker
         self.interval = interval
         self.targetAcquisition = targetAcquisition
+        self.headActuator = headActuator
         self.running = True
         print(f'VisualizerThread() ctor')
 
@@ -42,6 +44,13 @@ class VisualizerThread(threading.Thread):
                     vis = latest_frame.copy()
                     targetTrack = self.targetAcquisition.getTargetTrack()
                     draw_tracks(vis, self.tracker.get_all_tracks(), targetTrack)
+                    headLoc = self.targetAcquisition.reference_point
+                    
+                    cv2.circle(vis, center=headLoc, radius=5, color=(255, 0, 0), thickness=2)
+                    angleRad=math.radians(90 - self.headActuator.targetAngle)
+                    lineEndPoint = (headLoc[0] + round(150 * math.sin(angleRad)), headLoc[1] - round(150 * math.cos(angleRad)))
+                    #print(f'{headLoc} -> {lineEndPoint}')
+                    cv2.line(vis, headLoc, lineEndPoint, (255, 0, 0), 2)
                     cv2.imshow("Track Visualizer", vis)
                     cv2.waitKey(1)
                 #else:
@@ -84,9 +93,9 @@ targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.updat
 
 def buildPipelineStr(enable_rtsp):
     pipeline_str = (
-        #f'uridecodebin uri="{RTSP_URL}"  ! '
-        f'filesrc location="{INPUT}" name=source !'
-        f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+        f'uridecodebin uri="{RTSP_URL}"  ! '
+        #f'filesrc location="{INPUT}" name=source !'
+        #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
         f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
         f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
         f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '
@@ -371,7 +380,7 @@ def main():
     cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
     targetAcquisition.start()
-    visualizer = VisualizerThread(tracker, interval=0.5, targetAcquisition=targetAcquisition)
+    visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.2)
     visualizer.daemon = True
     visualizer.start()
     loop.run()

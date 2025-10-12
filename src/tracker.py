@@ -246,10 +246,10 @@ class Tracker:
             # Check against threshold
             if iou > iou_threshold:
                 # Arrr! Ye be in forbidden waters!
-                print(f"[Exclusion] Detection excluded (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
+                #print(f"[Exclusion] Detection excluded (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
                 return True
-            else:
-                print(f"[Exclusion] nope (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
+            #else:
+                #print(f"[Exclusion] nope (IoU={iou:.2f} > {iou_threshold:.2f}) with {det_xywh['box']} -> exclusion box {ex}")
         return False
 
     def get_all_tracks(self):

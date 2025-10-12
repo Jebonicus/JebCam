@@ -89,8 +89,7 @@ RTSP_MOUNT = "/stream"
 RTSP_PORT = 8554
 # =====================
 tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0, exclusions=[
-    (531, 37,  55, 76),
-    (470, 56,  25, 40)
+    (531, 37,  55, 76)
 ])
 headActuator = HeadActuator(reference_point=(500, 350))
 targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(500, 350))
@@ -99,9 +98,9 @@ targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.updat
 
 def buildPipelineStr(enable_rtsp):
     pipeline_str = (
-        #f'uridecodebin uri="{RTSP_URL}"  ! '
-        f'filesrc location="{INPUT}" name=source !'
-        f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
+        f'uridecodebin uri="{RTSP_URL}"  ! '
+        #f'filesrc location="{INPUT}" name=source !'
+        #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
         f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '
         f'videocrop left={CROP_AMOUNT_L} right={CROP_AMOUNT_R} top=0 bottom=0 ! '
         f'videoscale add-borders=true ! video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate={FPS} ! '

@@ -11,6 +11,7 @@ class HeadActuator:
         self.reference_point = reference_point
         self.last_change_time = 0
         self.min_mqtt_wait_time_ms = 0.04
+        self.lastEyes = -1
 
         # Connect to MQTT server
         self.mqtt_client = mqtt.Client()
@@ -29,6 +30,12 @@ class HeadActuator:
         changed=False
         if targetTrack is None:
             newAngle = self.default_angle
+            if self.mqtt_connected and self.lastEyes != 0:
+                try:
+                    self.mqtt_client.publish("halloween/eyes", 0)
+                    self.lastEyes = 0
+                except Exception as e:
+                    print(f"MQTT publish failed: {e}")
         else:
             x, y, w, h = targetTrack.get_state().astype(int)
             bottomMiddleCoord = (x + w / 2, y + h)
@@ -53,5 +60,8 @@ class HeadActuator:
                 try:
                     self.mqtt_client.publish("halloween/head_angle", round(self.targetAngle))
                     # print(f"Published {self.targetAngle:.1f}° to halloween/head_angle")
+                    if self.lastEyes != 1:
+                        self.mqtt_client.publish("halloween/eyes", 1)
+                        self.lastEyes = 1
                 except Exception as e:
                     print(f"MQTT publish failed: {e}")

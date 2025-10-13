@@ -69,6 +69,7 @@ HEF_PATH = "/usr/local/hailo/resources/models/hailo8l/yolov8m.hef"   # adjust
 PP_SO = "/usr/local/hailo/resources/so/libyolo_hailortpp_postprocess.so"  # adjust
 #INPUT = "/usr/local/hailo/resources/videos/example_640.mp4"  # or "rtsp://..."
 INPUT = "cam_s.mp4"
+INPUT = "/A/JebCam/Person1.mp4"
 INPUT = "/A/JebCam/Person2_x3.mp4"
 #INPUT = "/A/JebCam/Person3_dog.mp4"
 #INPUT = "/A/JebCam/Person4_kids.mp4"
@@ -91,8 +92,8 @@ RTSP_PORT = 8554
 tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0, exclusions=[
     (531, 37,  55, 76)
 ])
-headActuator = HeadActuator(reference_point=(500, 350))
-targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(500, 350))
+headActuator = HeadActuator(reference_point=(480, 360))
+targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(480, 360))
 
 #1920×576
 
@@ -326,12 +327,14 @@ def main():
     # Define optional boolean flags
     parser.add_argument('--split', action='store_true', help='Enable split pipeline mode (buggy, slow)')
     parser.add_argument('--rtsp', action='store_true', help='Enable RTSP output')
+    parser.add_argument('--gui', action='store_true', help='Enable GUI')
 
     args = parser.parse_args()
 
     # Access as boolean variables
     split = args.split
     enable_rtsp = args.rtsp
+    enable_gui = args.gui
 
     pipeline_str = buildPipelineStr(enable_rtsp)
     if split:
@@ -382,12 +385,14 @@ def main():
     signal.signal(signal.SIGINT, _sigint)
     signal.signal(signal.SIGTERM, _sigint)
 
-    cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
+    if enable_gui:
+        cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
+        visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.5)
+        visualizer.daemon = True
+        visualizer.start()
+    
     targetAcquisition.start()
-    visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.5)
-    visualizer.daemon = True
-    visualizer.start()
     loop.run()
 
 if __name__ == "__main__":

@@ -1,0 +1,17 @@
+[Unit]
+Description=JebCam Python Service
+After=network.target
+
+[Service]
+User=jeb
+Group=jeb
+WorkingDirectory=/home/jeb/dev/jebcam
+Environment="PATH=/home/jeb/dev/jebcam/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/jeb/dev/jebcam/venv/bin/python /home/jeb/dev/jebcam/src/camtest3.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

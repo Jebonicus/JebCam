@@ -21,6 +21,10 @@ const char *publishTopic = "halloween/head_heartbeat";
 
 const long interval = 1000;
 unsigned long previousMillis = 0;
+
+unsigned long lastServoUpdate = 0;
+const unsigned long SERVO_UPDATE_INTERVAL = 20; // ms
+
 int heartbeat = 0;
 
 // Servo setup
@@ -30,7 +34,15 @@ const int LED1_PIN = 27;   // Port for LED #1
 const int LED2_PIN = 14;   // Port for LED #2
 
 // This will store the latest servo angle from MQTT
-int targetAngle = 90;  // default midpoint
+float targetAngle = 90;  // default midpoint
+float smoothedAngle = targetAngle;
+const float SMOOTH_ALPHA = 0.1;
+const float SMOOTH_ALPHA_NOTARGET = 0.05;
+const float MAX_DELTA = 2.5;
+const float MAX_DELTA_NOTARGET = 0.75;
+int cachedServoVal = -1;
+
+bool targetLocked = true;
 
 #define DEBUG 0
 
@@ -105,7 +117,7 @@ void setup() {
 
   // Attach servo
   headServo.attach(servoPin);
-  headServo.write(targetAngle);  // move to default
+  headServo.write(smoothedAngle);  // move to default
 
   pinMode(LED1_PIN, OUTPUT);
   pinMode(LED2_PIN, OUTPUT);
@@ -113,6 +125,7 @@ void setup() {
   // Light 'em both to start
   digitalWrite(LED1_PIN, HIGH);
   digitalWrite(LED2_PIN, HIGH);
+  targetLocked = true;
 }
 
 
@@ -122,6 +135,27 @@ void loop() {
   mqttClient.poll();
 
   unsigned long currentMillis = millis();
+
+  if ((currentMillis - lastServoUpdate) >= SERVO_UPDATE_INTERVAL) {
+    lastServoUpdate = currentMillis;
+
+    float delta = (targetLocked ? SMOOTH_ALPHA : SMOOTH_ALPHA_NOTARGET) * (targetAngle - smoothedAngle);
+    float maxDelta = targetLocked ? MAX_DELTA : MAX_DELTA_NOTARGET;
+    if(delta < -maxDelta) { delta = -maxDelta; }
+    else if(delta > maxDelta) { delta = maxDelta; }
+
+    smoothedAngle += delta;
+    DEBUG_PRINT("targetAngle:");
+    DEBUG_PRINT(targetAngle);
+    DEBUG_PRINT("\tsmoothedAngle:");
+    DEBUG_PRINTLN(smoothedAngle);
+
+    int servoVal = round(smoothedAngle);
+    if(servoVal != cachedServoVal) {
+      headServo.write(servoVal);
+      cachedServoVal = servoVal;
+    }
+  }
 
   if (currentMillis - previousMillis >= interval) {
     // save the last time a message was sent
@@ -135,8 +169,6 @@ void loop() {
     heartbeat++;
   }
 
-  // Move servo to target angle
-  headServo.write(targetAngle);
 }
 
 void onMqttMessage(int messageSize) {
@@ -186,10 +218,12 @@ void onMqttMessage(int messageSize) {
         digitalWrite(LED1_PIN, LOW);
         digitalWrite(LED2_PIN, LOW);
         DEBUG_PRINTLN("👁️ Eyes OFF");
+        targetLocked = false;
       } else {
         digitalWrite(LED1_PIN, HIGH);
         digitalWrite(LED2_PIN, HIGH);
         DEBUG_PRINTLN("👁️ Eyes ON");
+        targetLocked = true;
       }
     } else {
       DEBUG_PRINTLN("⚠️  Unknown topic, ignoring");

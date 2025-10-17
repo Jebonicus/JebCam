@@ -12,6 +12,8 @@ class HeadActuator:
         self.last_change_time = 0
         self.min_mqtt_wait_time_ms = 0.04
         self.lastEyes = -1
+        self.lastTrackId=-1
+        self.logCount=0
 
         # Connect to MQTT server
         self.mqtt_client = mqtt.Client()
@@ -27,9 +29,11 @@ class HeadActuator:
             self.mqtt_connected = False
 
     def update(self, targetTrack):
+
         changed=False
         if targetTrack is None:
             newAngle = self.default_angle
+            self.lastTrackId = -1
             if self.mqtt_connected and self.lastEyes != 0:
                 try:
                     self.mqtt_client.publish("halloween/eyes", 0)
@@ -48,17 +52,23 @@ class HeadActuator:
                 raw_angle = 180
             adjusted_angle = (raw_angle)  # make 0° up
             newAngle = max(0, min(180, adjusted_angle))  # clamp to 0–180°
-            print(f'HeadActuator.update() TRACK {targetTrack.id}: [{dx:.1f},{dy:.1f}]->{raw_angle}°->{newAngle:.1f}°')
+            if targetTrack.id != self.lastTrackId:
+                self.lastTrackId = targetTrack.id
+                self.logCount = 0
+            if self.logCount%5 == 0:
+                print(f'HeadActuator.update() TRACK {targetTrack.id}: [{dx:.1f},{dy:.1f}]->{raw_angle}°->{newAngle:.1f}°')
+
+            self.logCount += 1
 
 
         time_since_change = time.time() - self.last_change_time
-        if time_since_change > self.min_mqtt_wait_time_ms and abs(newAngle-self.targetAngle)>=1:
+        if time_since_change > self.min_mqtt_wait_time_ms and abs(newAngle-self.targetAngle) >= 0.1:
             self.targetAngle = newAngle
             self.last_change_time = time.time()
             # Send to MQTT if connected
             if self.mqtt_connected:
                 try:
-                    self.mqtt_client.publish("halloween/head_angle", round(self.targetAngle))
+                    self.mqtt_client.publish("halloween/head_angle", round(self.targetAngle, 1))
                     # print(f"Published {self.targetAngle:.1f}° to halloween/head_angle")
                     if self.lastEyes != 1:
                         self.mqtt_client.publish("halloween/eyes", 1)

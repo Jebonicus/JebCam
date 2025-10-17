@@ -67,7 +67,8 @@ class TargetAcquisition(threading.Thread):
                 # Update lock duration
                 if self.targetTrack is not None:
                     self.targetTrack.targetLockDuration += self.interval
-                    print(f"[TargetAcquisition] Locked target {self.targetTrack.id} for {self.targetTrack.targetLockDuration:.2f}s (cost={best_cost:.2f})")
+                    if (round(self.targetTrack.targetLockDuration*10.0) % 20) == 0:
+                        print(f"[TargetAcquisition] Locked target {self.targetTrack.id} for {self.targetTrack.targetLockDuration:.2f}s (cost={best_cost:.2f})")
 
 
             if self.targetCallback is not None:

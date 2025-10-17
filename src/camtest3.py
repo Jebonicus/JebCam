@@ -18,18 +18,21 @@ from tracker import Tracker
 from jebsecrets import Secrets
 from targetAcquisition import TargetAcquisition
 from headActuator import HeadActuator
+from datetime import datetime
 
 latest_frame = None
 latest_lock = threading.Lock()
 
 class VisualizerThread(threading.Thread):
-    def __init__(self, tracker, targetAcquisition, headActuator, interval=1.0):
+    def __init__(self, tracker, targetAcquisition, headActuator, interval=1.0, enable_gui=True, image_path="."):
         super().__init__(daemon=True)
         self.tracker = tracker
         self.interval = interval
         self.targetAcquisition = targetAcquisition
         self.headActuator = headActuator
         self.running = True
+        self.enable_gui = enable_gui
+        self.image_path = image_path
         print(f'VisualizerThread() ctor')
 
     def run(self):
@@ -37,9 +40,7 @@ class VisualizerThread(threading.Thread):
         print(f'VisualizerThread.run()')
         #cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
         while self.running:
-            #print(f'VisualizerThread.run() A')
             with latest_lock:
-                #print(f'VisualizerThread.run() B')
                 if latest_frame is not None:
                     vis = latest_frame.copy()
                     targetTrack = self.targetAcquisition.getTargetTrack()
@@ -51,8 +52,16 @@ class VisualizerThread(threading.Thread):
                     lineEndPoint = (headLoc[0] + round(150 * math.sin(angleRad)), headLoc[1] - round(150 * math.cos(angleRad)))
                     #print(f'{headLoc} -> {lineEndPoint}')
                     cv2.line(vis, headLoc, lineEndPoint, (255, 0, 0), 2)
-                    cv2.imshow("Track Visualizer", vis)
-                    cv2.waitKey(1)
+                    if self.enable_gui:
+                        cv2.imshow("Track Visualizer", vis)
+                        cv2.waitKey(1)
+                    if targetTrack is not None:
+                        # Forge a timestamp in yer preferred pirate format: YYmmdd_hhMMss.SS
+                        timestamp = datetime.now().strftime("%y%m%d_%H%M%S.%f")[:-4]  # trims to centiseconds
+
+                        # Craft the filename with track ID and timestamp
+                        filename = f"{self.image_path}/track_visualizer_{targetTrack.id}_{timestamp}.png"
+                        cv2.imwrite(filename, vis)
                 #else:
                 #    "Latest frame empty"
             time.sleep(self.interval)
@@ -88,8 +97,9 @@ VIDEO_SINK = os.environ.get("GST_VIDEOSINK", "ximagesink") #  autovideosink # se
 OUTPUT_FILE = "out.mp4"
 RTSP_MOUNT = "/stream"
 RTSP_PORT = 8554
+IMAGE_PATH = "/A/JebCam/LoggedImages"
 # =====================
-tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0, exclusions=[
+tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0/FPS_NUM, exclusions=[
     (531, 37,  55, 76)
 ])
 headActuator = HeadActuator(reference_point=(480, 360))
@@ -243,7 +253,8 @@ def app_callback(identity_element, buffer):
         else:
             str=""
         box = t.get_state()   # xywh pixels of predicted/current box
-        print(f"TRACK {t.id} {str}: label={t.label} box={box} age={t.age} since_update={t.time_since_update} lock_dur={t.targetLockDuration:.2f}s")
+        if t.age % 20 == 0:
+            print(f"TRACK {t.id} {str}: label={t.label} box={box} age={t.age} since_update={t.time_since_update} lock_dur={t.targetLockDuration:.2f}s")
         #string_to_print += (f"Detection: {label} Confidence: {detection.get_confidence():.2f} Center: {centerX:.2f},{centerY:.2f} BBox: {bbox.xmin():.2f},{bbox.ymin():.2f},{bbox.width():.2f},{bbox.height():.2f}\n")
     #if len(string_to_print)>0:
     #  print(string_to_print)
@@ -385,12 +396,14 @@ def main():
     signal.signal(signal.SIGINT, _sigint)
     signal.signal(signal.SIGTERM, _sigint)
 
+    gui_interval=1.0
     if enable_gui:
         cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Track Visualizer", TARGET_WIDTH, ORIG_HEIGHT+50)  # width=1280, height=720
-        visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=0.5)
-        visualizer.daemon = True
-        visualizer.start()
+        gui_interval=0.5
+    visualizer = VisualizerThread(tracker, targetAcquisition, headActuator, interval=gui_interval, enable_gui=enable_gui, image_path=IMAGE_PATH)
+    visualizer.daemon = True
+    visualizer.start()
     
     targetAcquisition.start()
     loop.run()

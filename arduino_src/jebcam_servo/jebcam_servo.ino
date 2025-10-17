@@ -23,7 +23,7 @@ const long interval = 1000;
 unsigned long previousMillis = 0;
 
 unsigned long lastServoUpdate = 0;
-const unsigned long SERVO_UPDATE_INTERVAL = 20; // ms
+const unsigned long SERVO_UPDATE_INTERVAL = 40; // ms
 
 int heartbeat = 0;
 
@@ -36,13 +36,16 @@ const int LED2_PIN = 14;   // Port for LED #2
 // This will store the latest servo angle from MQTT
 float targetAngle = 90;  // default midpoint
 float smoothedAngle = targetAngle;
-const float SMOOTH_ALPHA = 0.1;
-const float SMOOTH_ALPHA_NOTARGET = 0.05;
-const float MAX_DELTA = 2.5;
-const float MAX_DELTA_NOTARGET = 0.75;
+
+const float DELTA_T = SERVO_UPDATE_INTERVAL/20;
+const float SMOOTH_ALPHA = 0.15 * DELTA_T;
+const float SMOOTH_ALPHA_NOTARGET = 0.07 * DELTA_T;
+const float MAX_DELTA = 2.8 * DELTA_T;
+const float MAX_DELTA_NOTARGET = 1.0 * DELTA_T;
+
 int cachedServoVal = -1;
 
-bool targetLocked = true;
+bool targetLocked = false;
 
 #define DEBUG 0
 
@@ -55,10 +58,16 @@ bool targetLocked = true;
 #endif
 
 void setup() {
+  pinMode(LED1_PIN, OUTPUT);
+  pinMode(LED2_PIN, OUTPUT);
+
+  digitalWrite(LED1_PIN, LOW);
+  digitalWrite(LED2_PIN, LOW);
+
   delay(3000);
   //Initialize serial and wait for port to open:
 #if DEBUG
-  Serial.begin(9600);
+  Serial.begin(115200);
   while (!Serial) {
     ;  // wait for serial port to connect. Needed for native USB port only
   }
@@ -74,7 +83,7 @@ void setup() {
     // failed, retry
     DEBUG_PRINT(".");
     delay(500);
-    if(attempts++ > 300) {
+    if(attempts++ > 60) {
       DEBUG_PRINTLN("Can't connect, restarting...");
       ESP.restart(); // reset and try again
       attempts = 0;
@@ -85,13 +94,17 @@ void setup() {
   DEBUG_PRINTLN();
   DEBUG_PRINT("Attempting to connect to the MQTT broker: ");
   DEBUG_PRINTLN(mqtt_server);
+  attempts = 0;
   mqttClient.setUsernamePassword(mqtt_user, mqtt_pass);
-  if (!mqttClient.connect(mqtt_server, mqtt_port)) {
+  while (!mqttClient.connect(mqtt_server, mqtt_port)) {
     DEBUG_PRINT("MQTT connection failed! Error code = ");
     DEBUG_PRINTLN(mqttClient.connectError());
-
-    while (1)
-      ;
+    delay(1000);
+    if(attempts++ > 30) {
+      DEBUG_PRINTLN("Can't connect, restarting...");
+      ESP.restart(); // reset and try again
+      attempts = 0;
+    }
   }
 
   DEBUG_PRINTLN("You're connected to the MQTT broker!");
@@ -116,15 +129,10 @@ void setup() {
   DEBUG_PRINTLN();
 
   // Attach servo
+  ledcDetach(13);  // force it free
   headServo.attach(servoPin);
   headServo.write(smoothedAngle);  // move to default
 
-  pinMode(LED1_PIN, OUTPUT);
-  pinMode(LED2_PIN, OUTPUT);
-
-  // Light 'em both to start
-  digitalWrite(LED1_PIN, HIGH);
-  digitalWrite(LED2_PIN, HIGH);
   targetLocked = true;
 }
 
@@ -145,16 +153,20 @@ void loop() {
     else if(delta > maxDelta) { delta = maxDelta; }
 
     smoothedAngle += delta;
-    DEBUG_PRINT("targetAngle:");
+    /*DEBUG_PRINT("targetAngle:");
     DEBUG_PRINT(targetAngle);
     DEBUG_PRINT("\tsmoothedAngle:");
-    DEBUG_PRINTLN(smoothedAngle);
+    DEBUG_PRINTLN(smoothedAngle);*/
 
-    int servoVal = round(smoothedAngle);
-    if(servoVal != cachedServoVal) {
-      headServo.write(servoVal);
-      cachedServoVal = servoVal;
-    }
+    // Convert the smoothed angle to pulse width for finer control
+     
+    int pulseWidth = round((smoothedAngle/180.0) * (2400-480) + 480);//map(round(smoothedAngle), 0, 180, 544, 2400);
+
+    // Avoid unnecessary writes
+    //if (pulseWidth != cachedServoVal) {
+      headServo.writeMicroseconds(pulseWidth);
+      cachedServoVal = pulseWidth;
+    //}
   }
 
   if (currentMillis - previousMillis >= interval) {
@@ -200,10 +212,8 @@ void onMqttMessage(int messageSize) {
 
   // Try to convert to integer
   if (payload.length() > 0) {
-    int intval = payload.toInt();  // Safe conversion; returns 0 if invalid
-
     if (t == 1) {
-      int angle = intval;
+      float angle = payload.toFloat();
       // Validate angle range (0–180 typical for servos)
       if (angle >= 0 && angle <= 190) {
         targetAngle = angle;
@@ -214,6 +224,7 @@ void onMqttMessage(int messageSize) {
         DEBUG_PRINTLN(angle);
       }
     } else if(t == 2) {
+      int intval = payload.toInt();  // Safe conversion; returns 0 if invalid
       if (intval == 0) {
         digitalWrite(LED1_PIN, LOW);
         digitalWrite(LED2_PIN, LOW);

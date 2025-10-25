@@ -49,8 +49,8 @@ class HeadActuator:
             dy = headCoord[1] - bottomMiddleCoord[1]
             # atan2 returns angle from X-axis, so 0° = right; we shift and flip it to 0°=up, 180°=right
             raw_angle = math.degrees(math.atan2(dy, dx))  # -180..180
-            if raw_angle < -90:
-                raw_angle = 180
+            if raw_angle < -140:
+                raw_angle = 270
             adjusted_angle = (raw_angle-90)  # make 0° up
             newAngle = max(-self.servo_range/2, min(self.servo_range/2, adjusted_angle))  # clamp to +-servo_range/2°
             if targetTrack.id != self.lastTrackId:

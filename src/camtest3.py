@@ -50,7 +50,7 @@ class VisualizerThread(threading.Thread):
                 headLoc = self.targetAcquisition.reference_point
                 
                 cv2.circle(vis, center=headLoc, radius=5, color=(255, 0, 0), thickness=2)
-                angleRad=math.radians(90 - self.headActuator.targetAngle)
+                angleRad=math.radians(0 - self.headActuator.targetAngle)
                 lineEndPoint = (headLoc[0] + round(150 * math.sin(angleRad)), headLoc[1] - round(150 * math.cos(angleRad)))
                 #print(f'{headLoc} -> {lineEndPoint}')
                 cv2.line(vis, headLoc, lineEndPoint, (255, 0, 0), 2)
@@ -106,7 +106,8 @@ ALLOWED_CLASSES = ["person", "dog", "cat"] #, "car"
 # =====================
 tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=3, dt=1.0/FPS_NUM, exclusions=[
     (531, 37,  55, 76),
-    (45.3, 52.1, 13.1, 21.7)
+    (45.3, 52.1, 13.1, 21.7),
+    (64.4, 67.3, 17.0, 27.8)
 ], extrapolate_time=EXTRAPOLATE_TIME_S)
 headActuator = HeadActuator(reference_point=(480, 360))
 targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(480, 360))

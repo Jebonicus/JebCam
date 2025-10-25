@@ -69,9 +69,10 @@ class KalmanFilterCV:
         return self.x.flatten()  # cx, cy, vx, vy
 
 class Track:
-    def __init__(self, data, frame_idx, dt=1.0):
+    def __init__(self, data, frame_idx, dt=1.0, extrapolate_time=0.0):
         """
         bbox_xywh: (x,y,w,h,label) top-left pixel coords
+        extrapolate_time: How far in the future to predict the track's location as for get_state
         """
         bbox_xywh = data['box']
         self.id = next(_next_id)
@@ -88,6 +89,7 @@ class Track:
         self.last_frame = frame_idx
         self.history = []  # optional: store past boxes
         self.targetLockDuration = 0.0
+        self.extrapolate_time = extrapolate_time
 
     def predict(self):
         s = self.kf.predict().flatten()
@@ -111,9 +113,20 @@ class Track:
         self.time_since_update += 1
         self.age += 1
 
-    def get_state(self):
+    def get_state(self, dt: float = None):
+        """
+        Return current or future predicted bounding box.
+        If dt > 0, predict position dt seconds into the future using constant velocity model.
+        """
+        if dt is None:
+            dt = getattr(self, "extrapolate_time", 0.0)
         s = self.kf.current_state()
-        cx, cy = s[0], s[1]
+        cx, cy, vx, vy = s
+
+        if dt > 0.0:
+            cx += vx * dt
+            cy += vy * dt
+
         return _cxcy_to_xywh(cx, cy, self.w, self.h)
 
 class Tracker:
@@ -123,7 +136,8 @@ class Tracker:
                  max_age=30,
                  min_hits=3,
                  dt=1.0,
-                 exclusions=[]):
+                 exclusions=[],
+                 extrapolate_time=0.0):
         """
         - iou_threshold: optional if using IoU matching
         - dist_threshold: maximum centroid distance for matching (pixels)
@@ -131,6 +145,7 @@ class Tracker:
         - min_hits: frames required to confirm a track
         - dt: time step for KF (1.0 per frame by default; set 1/fps if you have accurate FPS)
         - exclusions: array of (x,y,w,h) boxes to use as exclusion zones for suppressing creation of new tracks
+        - extrapolate_time: Duration(s) in which to extrapolate future positions for get_state calls
         """
         self.tracks = []
         self.iou_th = iou_threshold
@@ -140,6 +155,7 @@ class Tracker:
         self.frame_idx = 0
         self.dt = dt
         self.exclusions = exclusions
+        self.extrapolate_time = extrapolate_time
 
     @staticmethod
     def _centroid(box):
@@ -168,13 +184,13 @@ class Tracker:
 
         # Build cost matrix (centroid distance)
         det_centroids = np.array([self._centroid(d['box']) for d in detections_xywh])
-        tr_centroids = np.array([self._centroid(t.get_state()) for t in self.tracks]) if len(self.tracks) > 0 else np.array([])
+        tr_centroids = np.array([self._centroid(t.get_state(0)) for t in self.tracks]) if len(self.tracks) > 0 else np.array([])
 
         if len(self.tracks) == 0:
             # create tracks for all detections
             for d in detections_xywh:
                 if not self.is_excluded(d):
-                    self.tracks.append(Track(d, frame_idx=self.frame_idx, dt=self.dt))
+                    self.tracks.append(Track(d, frame_idx=self.frame_idx, dt=self.dt, extrapolate_time=self.extrapolate_time))
             return [t for t in self.tracks if t.hits >= self.min_hits]
 
         cost = np.zeros((len(self.tracks), len(detections_xywh)), dtype=float)
@@ -205,7 +221,7 @@ class Tracker:
         # Unmatched detections -> create new tracks
         for j, det in enumerate(detections_xywh):
             if j not in matched_det and not self.is_excluded(det):
-                self.tracks.append(Track(det, frame_idx=self.frame_idx, dt=self.dt))
+                self.tracks.append(Track(det, frame_idx=self.frame_idx, dt=self.dt, extrapolate_time=self.extrapolate_time))
 
         # Remove dead tracks
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_age]

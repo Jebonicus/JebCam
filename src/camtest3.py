@@ -40,30 +40,32 @@ class VisualizerThread(threading.Thread):
         print(f'VisualizerThread.run()')
         #cv2.namedWindow("Track Visualizer", cv2.WINDOW_NORMAL)
         while self.running:
+            vis = None
             with latest_lock:
                 if latest_frame is not None:
                     vis = latest_frame.copy()
-                    targetTrack = self.targetAcquisition.getTargetTrack()
-                    draw_tracks(vis, self.tracker.get_all_tracks(), targetTrack)
-                    headLoc = self.targetAcquisition.reference_point
-                    
-                    cv2.circle(vis, center=headLoc, radius=5, color=(255, 0, 0), thickness=2)
-                    angleRad=math.radians(90 - self.headActuator.targetAngle)
-                    lineEndPoint = (headLoc[0] + round(150 * math.sin(angleRad)), headLoc[1] - round(150 * math.cos(angleRad)))
-                    #print(f'{headLoc} -> {lineEndPoint}')
-                    cv2.line(vis, headLoc, lineEndPoint, (255, 0, 0), 2)
-                    if self.enable_gui:
-                        cv2.imshow("Track Visualizer", vis)
-                        cv2.waitKey(1)
-                    if targetTrack is not None:
-                        # Forge a timestamp in yer preferred pirate format: YYmmdd_hhMMss.SS
-                        timestamp = datetime.now().strftime("%y%m%d_%H%M%S.%f")[:-4]  # trims to centiseconds
+            if vis is not None:
+                targetTrack = self.targetAcquisition.getTargetTrack()
+                draw_tracks(vis, self.tracker.get_all_tracks(), targetTrack)
+                headLoc = self.targetAcquisition.reference_point
+                
+                cv2.circle(vis, center=headLoc, radius=5, color=(255, 0, 0), thickness=2)
+                angleRad=math.radians(90 - self.headActuator.targetAngle)
+                lineEndPoint = (headLoc[0] + round(150 * math.sin(angleRad)), headLoc[1] - round(150 * math.cos(angleRad)))
+                #print(f'{headLoc} -> {lineEndPoint}')
+                cv2.line(vis, headLoc, lineEndPoint, (255, 0, 0), 2)
+                if self.enable_gui:
+                    cv2.imshow("Track Visualizer", vis)
+                    cv2.waitKey(1)
+                if targetTrack is not None:
+                    # Forge a timestamp in yer preferred pirate format: YYmmdd_hhMMss.SS
+                    timestamp = datetime.now().strftime("%y%m%d_%H%M%S.%f")[:-4]  # trims to centiseconds
 
-                        # Craft the filename with track ID and timestamp
-                        filename = f"{self.image_path}/track_visualizer_{targetTrack.id}_{timestamp}.png"
-                        cv2.imwrite(filename, vis)
-                #else:
-                #    "Latest frame empty"
+                    # Craft the filename with track ID and timestamp
+                    filename = f"{self.image_path}/track_{timestamp}_{targetTrack.id}.png"
+                    cv2.imwrite(filename, vis)
+                    #else:
+                    #    "Latest frame empty"
             time.sleep(self.interval)
 
     def stop(self):
@@ -98,10 +100,14 @@ OUTPUT_FILE = "out.mp4"
 RTSP_MOUNT = "/stream"
 RTSP_PORT = 8554
 IMAGE_PATH = "/A/JebCam/LoggedImages"
+EXTRAPOLATE_TIME_S = 1.0
+ALLOWED_CLASSES = ["person", "dog", "cat"] #, "car"
+
 # =====================
-tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=1, dt=1.0/FPS_NUM, exclusions=[
-    (531, 37,  55, 76)
-])
+tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=3, dt=1.0/FPS_NUM, exclusions=[
+    (531, 37,  55, 76),
+    (45.3, 52.1, 13.1, 21.7)
+], extrapolate_time=EXTRAPOLATE_TIME_S)
 headActuator = HeadActuator(reference_point=(480, 360))
 targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(480, 360))
 
@@ -221,7 +227,7 @@ def on_new_sample(sink, factory=None):
     #print(f'Sending frame...')
     return Gst.FlowReturn.OK
 
-ALLOWED_CLASSES = ["person", "dog", "cat"] #, "car"
+
 def app_callback(identity_element, buffer):
     #string_to_print = ""
     frame_w = TARGET_WIDTH   # the pixel width your hailo inference is referencing
@@ -231,6 +237,7 @@ def app_callback(identity_element, buffer):
     if buffer is None:  # Check if the buffer is valid
         print("Buffer invalid")
         return Gst.PadProbeReturn.OK
+
     for detection in hailo.get_roi_from_buffer(buffer).get_objects_typed(hailo.HAILO_DETECTION):  # Get the detections from the buffer & Parse the detections
         label = detection.get_label()
         if label not in ALLOWED_CLASSES:

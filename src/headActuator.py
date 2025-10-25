@@ -5,7 +5,7 @@ import paho.mqtt.client as mqtt
 import time
 
 class HeadActuator:
-    def __init__(self, reference_point=(500, 350), default_angle=90):
+    def __init__(self, reference_point=(500, 350), default_angle=0, servo_range=270):
         self.default_angle = default_angle
         self.targetAngle = -2
         self.reference_point = reference_point
@@ -14,6 +14,7 @@ class HeadActuator:
         self.lastEyes = -1
         self.lastTrackId=-1
         self.logCount=0
+        self.servo_range = servo_range
 
         # Connect to MQTT server
         self.mqtt_client = mqtt.Client()
@@ -50,8 +51,8 @@ class HeadActuator:
             raw_angle = math.degrees(math.atan2(dy, dx))  # -180..180
             if raw_angle < -90:
                 raw_angle = 180
-            adjusted_angle = (raw_angle)  # make 0° up
-            newAngle = max(0, min(180, adjusted_angle))  # clamp to 0–180°
+            adjusted_angle = (raw_angle-90)  # make 0° up
+            newAngle = max(-self.servo_range/2, min(self.servo_range/2, adjusted_angle))  # clamp to +-servo_range/2°
             if targetTrack.id != self.lastTrackId:
                 self.lastTrackId = targetTrack.id
                 self.logCount = 0

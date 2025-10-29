@@ -116,7 +116,9 @@ targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.updat
 
 def buildPipelineStr(enable_rtsp):
     pipeline_str = (
-        f'uridecodebin uri="{RTSP_URL}"  ! '
+        #f'uridecodebin uri="{RTSP_URL}"  ! '
+        f'rtspsrc location={RTSP_URL} latency=50 ! '
+        f'rtph264depay ! h264parse ! decodebin ! '
         #f'filesrc location="{INPUT}" name=source !'
         #f'queue leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! decodebin ! '
         f'videoconvert ! videoscale ! video/x-raw,format=RGB,width={ORIG_WIDTH},height={ORIG_HEIGHT},framerate={FPS} ! '

@@ -10,6 +10,7 @@ import threading
 import time
 import argparse
 import math
+import socket
 gi.require_version('Gst', '1.0')
 gi.require_version('GstRtspServer', '1.0')
 from gi.repository import Gst, GstRtspServer, GObject, GLib, GstVideo
@@ -107,7 +108,10 @@ ALLOWED_CLASSES = ["person", "dog", "cat"] #, "car"
 tracker = Tracker(dist_threshold=120.0, max_age=int(4*FPS_NUM), min_hits=3, dt=1.0/FPS_NUM, exclusions=[
     (531, 37,  55, 76),
     (45.3, 52.1, 13.1, 21.7),
-    (64.4, 67.3, 17.0, 27.8)
+    (64.4, 67.3, 17.0, 27.8),
+    (459, 229, 90, 350),
+    (722, 117, 50, 55),
+    (0, 0, 60, 75)
 ], extrapolate_time=EXTRAPOLATE_TIME_S)
 headActuator = HeadActuator(reference_point=(480, 360))
 targetAcquisition = TargetAcquisition(tracker, targetCallback=headActuator.update, reference_point=(480, 360))
@@ -133,7 +137,7 @@ def buildPipelineStr(enable_rtsp):
         f'videoconvert ! video/x-raw,width={WIDTH},height={HEIGHT},format=RGB ! '   # <--- Force HEF input size
         f'queue name=inf_hailonet_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
         f'hailonet hef-path={HEF_PATH} batch-size={BATCH_SIZE} vdevice-group-id=1 '
-        f'nms-score-threshold=0.3 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
+        f'nms-score-threshold=0.4 nms-iou-threshold=0.35 output-format-type=HAILO_FORMAT_TYPE_FLOAT32 force-writable=true ! '
         f'queue name=inf_hailofilter_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
         f'hailofilter so-path={PP_SO} function-name=filter qos=false ! '
         f'queue name=inf_out_q leaky=no max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! '
@@ -341,6 +345,15 @@ def restart_pipeline():
     GLib.timeout_add(10000, stopstart_pipeline)  # 10s delay
     return False  # returning False removes the timeout
 
+def local_ip():
+    """IP of the interface carrying the default route (eth0 or wlan0, whichever is up)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.168.1.1", 80))  # no packet is sent for UDP connect
+            return s.getsockname()[0]
+    except OSError:
+        return socket.gethostname()
+
 def main():
     global pipeline
     parser = argparse.ArgumentParser(description="JebCam")
@@ -389,13 +402,16 @@ def main():
         mounts.add_factory(RTSP_MOUNT, rtsp_factory)
         server.attach(None)
         #pipeline.set_state(Gst.State.PLAYING)
-        print(f"RTSP server running at rtsp://192.168.1.138:{RTSP_PORT}{RTSP_MOUNT}")
+        print(f"RTSP server running at rtsp://{local_ip()}:{RTSP_PORT}{RTSP_MOUNT}")
 
     if not enable_rtsp or split:
+        # We own the pipeline in these modes. In plain RTSP mode the RTSP server
+        # builds and owns it per client (RtspFactory.do_create_element), so there
+        # is no global 'pipeline' to start or watch here.
         pipeline.set_state(Gst.State.PLAYING)
-    bus = pipeline.get_bus()
-    bus.add_signal_watch()
-    bus.connect("message::eos", on_eos)
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::eos", on_eos)
 
     # ===== MAIN LOOP =====
     loop = GLib.MainLoop()

@@ -2,9 +2,10 @@ from tracker import Tracker
 import time
 import math
 import threading
+from presencePublisher import PresencePublisher
 
 class TargetAcquisition(threading.Thread):
-    def __init__(self, tracker, targetCallback=None, interval=0.1, hysteresis=10.0, reference_point=(500, 350)): #434, 575
+    def __init__(self, tracker, targetCallback=None, interval=0.1, hysteresis=10.0, reference_point=(500, 350), talker_reference_point=(700, 300)): #434, 575
         """
         tracker: the Tracker instance
         interval: seconds between updates
@@ -20,12 +21,14 @@ class TargetAcquisition(threading.Thread):
         self.running = True
         self.targetTrack = None
         self.last_switch_time = 0
-        self.min_lock_time = 5.0  # seconds, or however long ye want to hold target
+        self.min_lock_time = 5.0  # seconds, or however long ye want to hold target 
+        self.presence = PresencePublisher(reference_point=talker_reference_point)
         print(f'TargetAcquisition() ctor')
 
     def run(self):
         while self.running:
             tracks = self.tracker.get_all_tracks()
+            self.presence.update(tracks)
             track_costs = {}
             time_since_switch = time.time() - self.last_switch_time
             
